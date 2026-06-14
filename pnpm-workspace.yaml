@@ -1,0 +1,7 @@
+packages:
+  - "packages/*"
+  - "cli"
+  - "desktop"
+allowBuilds:
+  esbuild: true
+  vue-demi: true

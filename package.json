@@ -1,0 +1,18 @@
+{
+  "name": "xuflow",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Xuflow - CLI + Desktop AI Agent tool",
+  "scripts": {
+    "dev:desktop": "pnpm --filter xuflow-desktop tauri dev",
+    "build:desktop": "pnpm --filter xuflow-desktop tauri build",
+    "dev:cli": "pnpm --filter xuflow-cli dev",
+    "build:cli": "pnpm --filter xuflow-cli build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "sharp": "^0.35.1"
+  }
+}

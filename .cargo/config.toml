@@ -1,0 +1,9 @@
+# Use Tsinghua mirror for faster downloads in China
+[registries]
+crates-io = { index = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/" }
+
+[source.crates-io]
+replace-with = "tsinghua"
+
+[source.tsinghua]
+registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"

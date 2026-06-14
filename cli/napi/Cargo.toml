@@ -1,0 +1,19 @@
+[package]
+name = "xuflow-napi"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+xuflow-core = { path = "../../packages/core" }
+napi = { version = "2", features = ["async", "tokio_rt"] }
+napi-derive = "2"
+async-trait.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+
+[build-dependencies]
+napi-build = "2"
