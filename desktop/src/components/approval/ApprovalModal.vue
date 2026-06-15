@@ -39,6 +39,11 @@ async function reject() {
             />
           </svg>
         </div>
+        <button class="approval-close" @click="reject" title="关闭">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+            <path d="M5 5l8 8M13 5l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+          </svg>
+        </button>
         <h3 class="approval-title">工具执行审批</h3>
         <p class="approval-desc">AI 请求执行以下工具操作，请确认是否允许：</p>
       </div>
@@ -77,12 +82,44 @@ async function reject() {
 .approval-card {
   width: 480px;
   border-radius: 16px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .approval-header {
   text-align: center;
   margin-bottom: 24px;
+  position: relative;
+}
+
+.approval-close {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.approval-close:hover {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.dark .approval-close {
+  color: #64748b;
+}
+
+.dark .approval-close:hover {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.12);
 }
 
 .approval-icon {
@@ -166,8 +203,8 @@ async function reject() {
 }
 
 .dark .approval-params {
-  background: #1e1e3f;
-  border-color: rgba(255, 255, 255, 0.06);
+  background: #1c1c22;
+  border-color: rgba(255, 255, 255, 0.08);
 }
 
 .approval-actions {

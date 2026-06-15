@@ -21,10 +21,18 @@ pub struct ChatMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolDef {
+pub struct FunctionDef {
     pub name: String,
     pub description: String,
     pub parameters: serde_json::Value,
+}
+
+/// OpenAI-compatible tool definition: `{ type: "function", function: { name, description, parameters } }`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolDef {
+    #[serde(rename = "type")]
+    pub tool_type: String,
+    pub function: FunctionDef,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +71,8 @@ pub(crate) async fn openai_compat_chat(
     tx: &mpsc::Sender<StreamEvent>,
 ) -> Result<Usage, anyhow::Error> {
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+
+    eprintln!("[xuflow] POST {} | model={} | msgs={} | tools={}", url, model, params.messages.len(), params.tools.len());
 
     let body = serde_json::json!({
         "model": model,

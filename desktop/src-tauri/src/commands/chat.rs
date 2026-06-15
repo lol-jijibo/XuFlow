@@ -9,8 +9,16 @@ use xuflow_core::{
     agent::types::ApprovalHandler,
     backends::{LlmBackend, StreamEvent},
     backends::deepseek::DeepSeekBackend,
+    backends::volcengine::VolcEngineBackend,
     tools::{bash::BashTool, file::{ReadFileTool, WriteFileTool, ListDirTool}, grep::GrepTool, web::WebFetchTool, ToolRegistry},
 };
+
+// ---------------------------------------------------------------------------
+// Shared approval channel — single source of truth for both the
+// TauriApprovalHandler (writer) and respond_approval command (reader).
+// ---------------------------------------------------------------------------
+
+type ApprovalChannel = Arc<Mutex<Option<oneshot::Sender<bool>>>>;
 
 // ---------------------------------------------------------------------------
 // Approval bridge: frontend shows modal, user clicks, result returns here
@@ -20,13 +28,13 @@ use xuflow_core::{
 /// this sends an event to the frontend and waits for the user's response.
 struct TauriApprovalHandler {
     app_handle: tauri::AppHandle,
-    /// Channel to receive the user's decision from the Tauri command.
-    pending_tx: Mutex<Option<oneshot::Sender<bool>>>,
+    /// Shared channel — the handler writes, respond_approval reads.
+    pending_tx: ApprovalChannel,
 }
 
 impl TauriApprovalHandler {
-    fn new(app_handle: tauri::AppHandle) -> Self {
-        Self { app_handle, pending_tx: Mutex::new(None) }
+    fn new(app_handle: tauri::AppHandle, pending_tx: ApprovalChannel) -> Self {
+        Self { app_handle, pending_tx }
     }
 }
 
@@ -53,7 +61,7 @@ pub async fn respond_approval(
     approved: bool,
     state: tauri::State<'_, Arc<AgentSession>>,
 ) -> Result<(), String> {
-    let mut guard = state.pending_approval_tx.lock().await;
+    let mut guard = state.approval_tx.lock().await;
     if let Some(tx) = guard.take() {
         let _ = tx.send(approved);
     }
@@ -67,13 +75,45 @@ pub async fn respond_approval(
 pub struct AgentSession {
     pub agent: Mutex<AgentLoop>,
     pub cancelled: AtomicBool,
-    pub pending_approval_tx: Mutex<Option<oneshot::Sender<bool>>>,
+    /// Shared approval channel — also held by TauriApprovalHandler.
+    pub approval_tx: ApprovalChannel,
 }
 
 impl AgentSession {
-    pub fn new(api_key: String, model: String, app_handle: tauri::AppHandle) -> Self {
-        let backend: Arc<dyn LlmBackend> = Arc::new(DeepSeekBackend::new(model, api_key, None));
+    /// Create a new session. Call `configure_agent` from the frontend to set
+    /// real credentials before the first `send_message`.
+    pub fn new(api_key: String, model: String, provider: String, app_handle: tauri::AppHandle) -> Self {
+        let approval_tx: ApprovalChannel = Arc::new(Mutex::new(None));
 
+        let backend = Self::build_backend(&provider, &model, &api_key);
+        let agent = Self::build_agent(backend, app_handle.clone(), approval_tx.clone());
+
+        Self {
+            agent: Mutex::new(agent),
+            cancelled: AtomicBool::new(false),
+            approval_tx,
+        }
+    }
+
+    /// Rebuild the backend and agent loop with new credentials / model.
+    pub async fn reconfigure(&self, api_key: String, model: String, provider: String, app_handle: tauri::AppHandle) {
+        let backend = Self::build_backend(&provider, &model, &api_key);
+        let agent = Self::build_agent(backend, app_handle, self.approval_tx.clone());
+        *self.agent.lock().await = agent;
+    }
+
+    fn build_backend(provider: &str, model: &str, api_key: &str) -> Arc<dyn LlmBackend> {
+        match provider {
+            "volcengine" => Arc::new(VolcEngineBackend::new(model.to_string(), api_key.to_string(), None)),
+            _ => Arc::new(DeepSeekBackend::new(model.to_string(), api_key.to_string(), None)),
+        }
+    }
+
+    fn build_agent(
+        backend: Arc<dyn LlmBackend>,
+        app_handle: tauri::AppHandle,
+        approval_tx: ApprovalChannel,
+    ) -> AgentLoop {
         let mut registry = ToolRegistry::new();
         registry.register(Box::new(ReadFileTool));
         registry.register(Box::new(WriteFileTool));
@@ -83,22 +123,31 @@ impl AgentSession {
         registry.register(Box::new(WebFetchTool));
 
         let tools = Arc::new(registry);
-        let approval: Arc<dyn ApprovalHandler> = Arc::new(TauriApprovalHandler::new(app_handle));
+        let approval: Arc<dyn ApprovalHandler> = Arc::new(TauriApprovalHandler::new(app_handle, approval_tx));
 
-        let agent = AgentLoop::new(backend, tools, approval)
-            .with_system_prompt(SYSTEM_PROMPT);
-
-        Self {
-            agent: Mutex::new(agent),
-            cancelled: AtomicBool::new(false),
-            pending_approval_tx: Mutex::new(None),
-        }
+        AgentLoop::new(backend, tools, approval)
+            .with_system_prompt(SYSTEM_PROMPT)
     }
 }
 
 // ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
+
+/// Called by the frontend to push credentials & model selection to the backend.
+/// Must be invoked at least once before `send_message`, and again whenever the
+/// user changes provider / model / API key.
+#[tauri::command]
+pub async fn configure_agent(
+    api_key: String,
+    provider: String,
+    model: String,
+    state: tauri::State<'_, Arc<AgentSession>>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    state.reconfigure(api_key, model, provider, app).await;
+    Ok(())
+}
 
 #[tauri::command]
 pub async fn send_message(
@@ -163,6 +212,16 @@ pub async fn send_message(
         Ok(usage) => Ok(format!("{} tokens", usage.total_tokens)),
         Err(e) => Err(format!("Agent error: {}", e)),
     }
+}
+
+/// Read API keys from system environment variables.
+/// Looks for DEEP_SEEK_API_KEY and ARK_API_KEY (Volcengine/Ark).
+#[tauri::command]
+pub fn get_env_api_keys() -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({
+        "deepseek_api_key": std::env::var("DEEP_SEEK_API_KEY").unwrap_or_default(),
+        "ark_api_key": std::env::var("ARK_API_KEY").unwrap_or_default(),
+    }))
 }
 
 #[tauri::command]

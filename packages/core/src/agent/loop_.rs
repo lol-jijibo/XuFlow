@@ -8,7 +8,7 @@
 ///     └─ done -> 结束本轮
 
 use crate::agent::types::ApprovalHandler;
-use crate::backends::{ChatMessage, ChatParams, LlmBackend, StreamEvent, ToolDef, Usage};
+use crate::backends::{ChatMessage, ChatParams, FunctionDef, LlmBackend, StreamEvent, ToolDef, Usage};
 use crate::tools::ToolRegistry;
 use serde_json::Value;
 use std::sync::Arc;
@@ -58,9 +58,12 @@ impl AgentLoop {
         for _round in 0..MAX_TOOL_ROUNDS {
             // Build tool definitions from registry
             let tool_defs: Vec<ToolDef> = self.tools.list().iter().map(|t| ToolDef {
-                name: t.name().to_string(),
-                description: t.description().to_string(),
-                parameters: t.parameters(),
+                tool_type: "function".to_string(),
+                function: FunctionDef {
+                    name: t.name().to_string(),
+                    description: t.description().to_string(),
+                    parameters: t.parameters(),
+                },
             }).collect();
 
             // Create intermediate channel: backend streams here, agent processes and forwards to caller

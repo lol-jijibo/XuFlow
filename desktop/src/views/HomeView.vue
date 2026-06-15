@@ -36,7 +36,7 @@ const themeStore = useThemeStore();
 }
 
 .home-root.dark {
-  background: #0f0f23;
+  background: #101014;
 }
 
 .home-main {

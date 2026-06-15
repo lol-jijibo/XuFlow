@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, onMounted, computed } from "vue";
+import { ref, nextTick, watch, onMounted, onUnmounted, computed } from "vue";
 import { NInput, NButton, NScrollbar } from "naive-ui";
 import MessageItem from "./MessageItem.vue";
 import { useAgentStore } from "../../stores/agent";
-import { useProjectStore } from "../../stores/project";
 import { useThemeStore } from "../../stores/theme";
+import { useConfigStore } from "../../stores/config";
+import { useProjectStore } from "../../stores/project";
 import { useTauriEvent } from "../../composables/useTauriEvent";
 
 const store = useAgentStore();
-const projectStore = useProjectStore();
 const themeStore = useThemeStore();
-const { setupListeners } = useTauriEvent();
+const configStore = useConfigStore();
+const { setupListeners, teardownListeners } = useTauriEvent();
 const inputText = ref("");
 const scrollRef = ref<InstanceType<typeof NScrollbar> | null>(null);
 const sending = ref(false);
@@ -19,16 +20,43 @@ const isEmpty = computed(() => store.messages.length === 0);
 
 onMounted(() => {
   setupListeners();
+  // Push current credentials to the Rust backend on mount
+  store.configureAgent();
 });
+
+onUnmounted(() => {
+  teardownListeners();
+});
+
+// Re-sync backend whenever the user switches model or provider
+watch(
+  () => [configStore.activeModelId, configStore.activeApiKey] as const,
+  () => {
+    store.configureAgent();
+  }
+);
 
 async function sendMessage() {
   const text = inputText.value.trim();
   if (!text || sending.value) return;
-  inputText.value = "";
+
+  // Validate that there is an active conversation before clearing input
+  const projectStore = useProjectStore();
+  if (!projectStore.activeConversation) {
+    console.error("[chat] No active conversation — cannot send message");
+    return;
+  }
+
   sending.value = true;
+  // Only clear input after we know the message will be processed
+  inputText.value = "";
 
   try {
     await store.sendMessage(text);
+  } catch (e) {
+    // Restore the text on failure so the user can retry
+    console.error("[chat] sendMessage failed:", e);
+    inputText.value = text;
   } finally {
     sending.value = false;
     nextTick(() => {
@@ -204,9 +232,6 @@ watch(
             </NButton>
           </div>
         </div>
-        <div class="input-hint">
-          <span>Xuflow 可以帮助你编写和调试代码</span>
-        </div>
       </div>
     </div>
   </div>
@@ -222,7 +247,7 @@ watch(
 }
 
 .chat-panel.dark {
-  background: #0f0f23;
+  background: #1c1c22;
 }
 
 /* Welcome */
@@ -302,14 +327,15 @@ watch(
 }
 
 .chat-panel.dark .prompt-card {
-  background: #1e1e3f;
-  border-color: rgba(255, 255, 255, 0.06);
+  background: #1c1c22;
+  border-color: rgba(255, 255, 255, 0.1);
   color: #94a3b8;
 }
 
 .chat-panel.dark .prompt-card:hover {
-  background: #2d2d5e;
+  background: #28282f;
   border-color: #6366f1;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
 }
 
 .prompt-card svg {
@@ -337,7 +363,7 @@ watch(
 }
 
 .chat-panel.dark .chat-footer {
-  background: #1a1a2e;
+  background: #1c1c22;
   border-top-color: rgba(255, 255, 255, 0.06);
 }
 
@@ -363,7 +389,7 @@ watch(
 }
 
 .chat-panel.dark .input-wrapper {
-  background: #0f0f23;
+  background: #1c1c22;
   border-color: rgba(255, 255, 255, 0.1);
 }
 
@@ -407,16 +433,5 @@ watch(
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.input-hint {
-  margin-top: 8px;
-  text-align: center;
-  font-size: 12px;
-  color: #94a3b8;
-}
-
-.chat-panel.dark .input-hint {
-  color: #64748b;
 }
 </style>

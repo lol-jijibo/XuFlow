@@ -30,10 +30,67 @@ function uid(): string {
   return `${Date.now()}-${nextId++}`;
 }
 
+const STORAGE_KEY = "xuflow-projects";
+
+function loadState(): { projects: Project[]; activeProjectId: string | null; activeConversationId: string | null } {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const data = JSON.parse(raw);
+      return {
+        projects: data.projects ?? [],
+        activeProjectId: data.activeProjectId ?? null,
+        activeConversationId: data.activeConversationId ?? null,
+      };
+    }
+  } catch (e) {
+    console.error("[project] Failed to load state from localStorage:", e);
+  }
+  return { projects: [], activeProjectId: null, activeConversationId: null };
+}
+
+function saveState(
+  projects: Project[],
+  activeProjectId: string | null,
+  activeConversationId: string | null
+) {
+  try {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ projects, activeProjectId, activeConversationId })
+    );
+  } catch (e) {
+    console.error("[project] Failed to save state to localStorage:", e);
+  }
+}
+
 export const useProjectStore = defineStore("project", () => {
-  const projects = ref<Project[]>([]);
-  const activeProjectId = ref<string | null>(null);
-  const activeConversationId = ref<string | null>(null);
+  const saved = loadState();
+  const projects = ref<Project[]>(saved.projects);
+  const activeProjectId = ref<string | null>(saved.activeProjectId);
+  const activeConversationId = ref<string | null>(saved.activeConversationId);
+
+  /** Validate that saved IDs still point to real objects; fall back to first available */
+  function validateState() {
+    // Validate active project
+    const project = projects.value.find((p) => p.id === activeProjectId.value);
+    if (!project) {
+      activeProjectId.value = projects.value[0]?.id ?? null;
+    }
+    // Validate active conversation within the active project
+    const activeProj = projects.value.find((p) => p.id === activeProjectId.value);
+    const conv = activeProj?.conversations.find((c) => c.id === activeConversationId.value);
+    if (!conv) {
+      activeConversationId.value = activeProj?.conversations[0]?.id ?? null;
+    }
+  }
+
+  validateState();
+
+  /** Persist current state to localStorage after every mutation */
+  function persist() {
+    saveState(projects.value, activeProjectId.value, activeConversationId.value);
+  }
 
   const activeProject = computed(() =>
     projects.value.find((p) => p.id === activeProjectId.value) ?? null
@@ -59,6 +116,7 @@ export const useProjectStore = defineStore("project", () => {
       updatedAt: Date.now(),
     };
     projects.value.push(project);
+    persist();
     return project;
   }
 
@@ -73,6 +131,7 @@ export const useProjectStore = defineStore("project", () => {
       updatedAt: Date.now(),
     };
     projects.value.push(project);
+    persist();
     return project;
   }
 
@@ -85,6 +144,7 @@ export const useProjectStore = defineStore("project", () => {
       activeConversationId.value =
         projects.value[0]?.conversations[0]?.id ?? null;
     }
+    persist();
   }
 
   function createConversation(projectId: string, title?: string): Conversation {
@@ -99,6 +159,7 @@ export const useProjectStore = defineStore("project", () => {
     };
     project.conversations.push(conv);
     project.updatedAt = Date.now();
+    persist();
     return conv;
   }
 
@@ -112,6 +173,7 @@ export const useProjectStore = defineStore("project", () => {
     if (activeConversationId.value === convId) {
       activeConversationId.value = project.conversations[0]?.id ?? null;
     }
+    persist();
   }
 
   function switchTo(projectId: string, convId?: string) {
@@ -122,14 +184,21 @@ export const useProjectStore = defineStore("project", () => {
       const project = projects.value.find((p) => p.id === projectId);
       activeConversationId.value = project?.conversations[0]?.id ?? null;
     }
+    persist();
   }
 
-  // Initialize: default project + default conversation
+  /** Called by agent store after messages change — ensures persistence on every message */
+  function persistMessages() {
+    persist();
+  }
+
+  // Initialize: default project + default conversation (only on first launch)
   if (projects.value.length === 0) {
     const defaultProject = createProject("默认项目");
     const defaultConv = createConversation(defaultProject.id, "默认会话");
     activeProjectId.value = defaultProject.id;
     activeConversationId.value = defaultConv.id;
+    // persist() already called inside createProject + createConversation
   }
 
   return {
@@ -145,5 +214,6 @@ export const useProjectStore = defineStore("project", () => {
     createConversation,
     deleteConversation,
     switchTo,
+    persistMessages,
   };
 });

@@ -74,7 +74,7 @@ const themeStore = useThemeStore();
 }
 
 .title-bar.dark {
-  background: #1a1a2e;
+  background: #101014;
   border-bottom-color: rgba(255, 255, 255, 0.06);
 }
 

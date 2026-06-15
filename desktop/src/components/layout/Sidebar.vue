@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick } from "vue";
+import { ref } from "vue";
 import { useRouter } from "vue-router";
 import { NButton, NTooltip, NInput, NScrollbar, NDropdown, useMessage } from "naive-ui";
 import { useProjectStore } from "../../stores/project";
@@ -18,19 +18,6 @@ const newProjectName = ref("");
 const creatingConvProjectId = ref<string | null>(null);
 const newConvTitle = ref("");
 const scrollRef = ref<InstanceType<typeof NScrollbar> | null>(null);
-
-const newProjectOptions = [
-  { label: "新建空白项目", key: "create" },
-  { label: "使用本地文件", key: "import" },
-];
-
-function handleNewProjectAction(key: string) {
-  if (key === "create") {
-    startCreateProject();
-  } else if (key === "import") {
-    handleImportProject();
-  }
-}
 
 function isExpanded(projectId: string): boolean {
   return expanded.value[projectId] ?? false;
@@ -69,6 +56,19 @@ function finishCreateProject() {
 function cancelCreateProject() {
   creatingProject.value = false;
   newProjectName.value = "";
+}
+
+const projectActionOptions = [
+  { label: "新建空白项目", key: "create" },
+  { label: "使用本地文件", key: "import" },
+];
+
+function handleProjectAction(key: string) {
+  if (key === "create") {
+    startCreateProject();
+  } else if (key === "import") {
+    handleImportProject();
+  }
 }
 
 async function handleImportProject() {
@@ -132,19 +132,6 @@ function handleDeleteConversation(projectId: string, convId: string) {
 
     <div class="sidebar-divider" />
 
-    <!-- Inline create project input -->
-    <div v-if="creatingProject" class="inline-create">
-      <NInput
-        v-model:value="newProjectName"
-        size="small"
-        placeholder="输入项目名称..."
-        :autofocus="true"
-        @keydown.enter="finishCreateProject"
-        @keydown.escape="cancelCreateProject"
-        @blur="finishCreateProject"
-      />
-    </div>
-
     <!-- Project header -->
     <div
       class="project-header"
@@ -153,35 +140,28 @@ function handleDeleteConversation(projectId: string, convId: string) {
     >
       <span class="project-header-title">项目列表</span>
       <div class="project-header-actions">
-        <NDropdown
-          trigger="click"
-          :options="newProjectOptions"
-          @select="handleNewProjectAction"
-        >
-          <NButton size="tiny" quaternary class="new-project-btn" title="新建项目">
+        <NDropdown trigger="click" :options="projectActionOptions" @select="handleProjectAction">
+          <NButton size="tiny" quaternary class="add-project-btn">
             <template #icon>
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                 <path
                   d="M2 4.5A1.5 1.5 0 013.5 3h3.172a1.5 1.5 0 011.06.44l.768.768a1.5 1.5 0 001.06.44H12.5A1.5 1.5 0 0114 6.148V12.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 12.5V4.5z"
-                  fill="currentColor"
-                  opacity="0.2"
-                />
-                <path
-                  d="M2 4.5A1.5 1.5 0 013.5 3h3.172a1.5 1.5 0 011.06.44l.768.768a1.5 1.5 0 001.06.44H12.5A1.5 1.5 0 0114 6.148V12.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 12.5V4.5z"
                   stroke="currentColor"
                   stroke-width="1.2"
+                  fill="none"
                 />
+                <circle cx="12" cy="5" r="4" fill="currentColor" />
                 <path
-                  d="M8 6v4M6 8h4"
-                  stroke="currentColor"
-                  stroke-width="1.4"
+                  d="M10.5 5h3M12 3.5v3"
+                  stroke="#fff"
+                  stroke-width="1.2"
                   stroke-linecap="round"
                 />
               </svg>
             </template>
           </NButton>
         </NDropdown>
-        <NTooltip v-show="headerHovered" trigger="hover">
+        <NTooltip trigger="hover">
           <template #trigger>
             <NButton size="tiny" quaternary @click="collapseAll">
               <template #icon>
@@ -200,6 +180,19 @@ function handleDeleteConversation(projectId: string, convId: string) {
           全部收起
         </NTooltip>
       </div>
+    </div>
+
+    <!-- Inline create project input -->
+    <div v-if="creatingProject" class="inline-create">
+      <NInput
+        v-model:value="newProjectName"
+        size="small"
+        placeholder="输入项目名称..."
+        :autofocus="true"
+        @keydown.enter="finishCreateProject"
+        @keydown.escape="cancelCreateProject"
+        @blur="finishCreateProject"
+      />
     </div>
 
     <!-- Project list -->
@@ -375,7 +368,7 @@ function handleDeleteConversation(projectId: string, convId: string) {
 }
 
 .sidebar.dark {
-  background: #1a1a2e;
+  background: #101014;
   border-right-color: rgba(255, 255, 255, 0.06);
 }
 
@@ -424,16 +417,6 @@ function handleDeleteConversation(projectId: string, convId: string) {
   background: rgba(255, 255, 255, 0.06);
 }
 
-.new-project-btn {
-  flex-shrink: 0;
-  opacity: 0.7;
-  transition: opacity 0.15s ease;
-}
-
-.new-project-btn:hover {
-  opacity: 1;
-}
-
 /* Inline create */
 .inline-create {
   padding: 4px 12px;
@@ -470,6 +453,14 @@ function handleDeleteConversation(projectId: string, convId: string) {
   display: flex;
   align-items: center;
   gap: 2px;
+}
+
+.add-project-btn {
+  color: #94a3b8;
+}
+
+.sidebar.dark .add-project-btn {
+  color: #64748b;
 }
 
 /* Project list scroll */

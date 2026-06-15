@@ -60,15 +60,28 @@ export const useThemeStore = defineStore("theme", () => {
     };
   });
 
+  function applyTheme() {
+    if (mode.value === "dark") {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+    }
+  }
+
   function toggle() {
     mode.value = mode.value === "light" ? "dark" : "light";
     localStorage.setItem("xuflow-theme", mode.value);
+    applyTheme();
   }
 
   function setMode(m: ThemeMode) {
     mode.value = m;
     localStorage.setItem("xuflow-theme", m);
+    applyTheme();
   }
+
+  // Apply on init
+  applyTheme();
 
   return { mode, isDark, theme, themeOverrides, toggle, setMode };
 });

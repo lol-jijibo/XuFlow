@@ -47,7 +47,7 @@ const configStore = useConfigStore();
 }
 
 .status-bar.dark {
-  background: #1a1a2e;
+  background: #101014;
   border-top-color: rgba(255, 255, 255, 0.06);
 }
 

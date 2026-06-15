@@ -66,11 +66,11 @@ const renderedHtml = computed(() => {
 
 /* Code blocks */
 .markdown-body :deep(.hljs-code-block) {
-  background: #1e1e2e;
+  background: #24242b;
   border-radius: 10px;
   margin: 12px 0;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .markdown-body :deep(.hljs-header) {
@@ -78,8 +78,8 @@ const renderedHtml = computed(() => {
   justify-content: space-between;
   align-items: center;
   padding: 8px 14px;
-  background: #2d2d44;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: #2a2a32;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .markdown-body :deep(.hljs-lang) {
@@ -191,7 +191,7 @@ const renderedHtml = computed(() => {
 }
 
 .dark.markdown-body :deep(th) {
-  background: #1e1e3f;
+  background: #1c1c22;
 }
 
 /* Links */

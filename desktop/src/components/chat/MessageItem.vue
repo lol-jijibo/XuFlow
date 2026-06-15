@@ -18,18 +18,6 @@ const isAssistant = computed(() => props.message.role === "assistant");
     class="message-item"
     :class="{ user: isUser, assistant: isAssistant, dark: themeStore.isDark }"
   >
-    <!-- AI avatar (left) -->
-    <div v-if="isAssistant" class="avatar avatar-ai">
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-        <path
-          d="M4 5h12M4 10h9M4 15h6"
-          stroke="#fff"
-          stroke-width="2"
-          stroke-linecap="round"
-        />
-      </svg>
-    </div>
-
     <!-- Bubble -->
     <div
       class="bubble"
@@ -52,19 +40,6 @@ const isAssistant = computed(() => props.message.role === "assistant");
         <span class="dot"></span>
       </div>
     </div>
-
-    <!-- User avatar (right) -->
-    <div v-if="isUser" class="avatar avatar-user">
-      <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-        <path
-          d="M15 16.5v-1.5a3 3 0 00-3-3H6a3 3 0 00-3 3v1.5M9 9a3 3 0 100-6 3 3 0 000 6z"
-          stroke="currentColor"
-          stroke-width="1.6"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        />
-      </svg>
-    </div>
   </div>
 </template>
 
@@ -72,45 +47,11 @@ const isAssistant = computed(() => props.message.role === "assistant");
 .message-item {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
   margin-bottom: 24px;
 }
 
 .message-item.user {
-  flex-direction: row-reverse;
-}
-
-/* Avatar */
-.avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition: transform 0.15s ease;
-}
-
-.avatar:hover {
-  transform: scale(1.05);
-}
-
-.avatar-ai {
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
-}
-
-.avatar-user {
-  background: #f1f5f9;
-  color: #475569;
-  border: 1px solid rgba(0, 0, 0, 0.06);
-}
-
-.dark .avatar-user {
-  background: #2d2d5e;
-  color: #94a3b8;
-  border-color: rgba(255, 255, 255, 0.1);
+  justify-content: flex-end;
 }
 
 /* Bubble base */
@@ -147,8 +88,8 @@ const isAssistant = computed(() => props.message.role === "assistant");
 }
 
 .dark .bubble-ai {
-  background: #1e1e3f;
-  border-color: rgba(255, 255, 255, 0.06);
+  background: #1c1c22;
+  border-color: rgba(255, 255, 255, 0.08);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
 }
 

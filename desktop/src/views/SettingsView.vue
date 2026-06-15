@@ -37,7 +37,7 @@ const themeStore = useThemeStore();
 }
 
 .settings-root.dark {
-  background: #0f0f23;
+  background: #101014;
 }
 
 .settings-main {

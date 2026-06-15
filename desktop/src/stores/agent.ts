@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "./project";
+import { useConfigStore } from "./config";
 
 export interface ApprovalRequest {
   tool: string;
@@ -31,6 +32,29 @@ export const useAgentStore = defineStore("agent", () => {
     },
   });
 
+  /**
+   * Push the current config (api key, provider, model) to the Rust backend.
+   * Must be called before the first send_message and whenever config changes.
+   */
+  async function configureAgent() {
+    const config = useConfigStore();
+    // Pull API keys from env vars on first launch (no-op if already set)
+    await config.initFromEnv();
+    try {
+      await invoke("configure_agent", {
+        apiKey: config.activeApiKey,
+        provider: config.activeProvider,
+        model: config.activeApiModelId,
+      });
+      console.log("[agent] configure_agent sent:", {
+        provider: config.activeProvider,
+        model: config.activeModelName,
+      });
+    } catch (e) {
+      console.error("[agent] configure_agent error:", e);
+    }
+  }
+
   async function sendMessage(content: string) {
     const projectStore = useProjectStore();
     const conv = projectStore.activeConversation;
@@ -42,6 +66,7 @@ export const useAgentStore = defineStore("agent", () => {
     conv.messages.push({ role: "user", content, done: true });
     conv.messages.push({ role: "assistant", content: "", done: false });
     conv.updatedAt = Date.now();
+    projectStore.persistMessages();
     isRunning.value = true;
 
     try {
@@ -56,6 +81,7 @@ export const useAgentStore = defineStore("agent", () => {
         lastMsg.done = true;
       }
     } finally {
+      projectStore.persistMessages();
       isRunning.value = false;
     }
   }
@@ -82,6 +108,7 @@ export const useAgentStore = defineStore("agent", () => {
     messages,
     isRunning,
     pendingApproval,
+    configureAgent,
     sendMessage,
     stopGeneration,
     respondApproval,

@@ -1,5 +1,6 @@
 use crate::backends::{openai_compat_chat, ChatParams, LlmBackend, StreamEvent};
 use async_trait::async_trait;
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 pub struct VolcEngineBackend {
@@ -11,11 +12,16 @@ pub struct VolcEngineBackend {
 
 impl VolcEngineBackend {
     pub fn new(model: String, api_key: String, base_url: Option<String>) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .connect_timeout(Duration::from_secs(15))
+            .build()
+            .expect("Failed to build reqwest client");
         Self {
             model,
             api_key,
             base_url: base_url.unwrap_or_else(|| "https://ark.cn-beijing.volces.com/api/v3".into()),
-            client: reqwest::Client::new(),
+            client,
         }
     }
 }

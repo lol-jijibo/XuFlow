@@ -12,7 +12,7 @@ importers:
         specifier: ^0.35.1
         version: 0.35.1
 
-  packages/cli:
+  cli:
     dependencies:
       ink:
         specifier: ^5.2
@@ -31,7 +31,7 @@ importers:
         specifier: ^5.7
         version: 5.7.2
 
-  packages/desktop:
+  desktop:
     dependencies:
       '@tauri-apps/api':
         specifier: ^2.5

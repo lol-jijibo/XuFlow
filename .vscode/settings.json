@@ -1,7 +1,9 @@
 {
   "cSpell.words": [
     "cdylib",
+    "conv",
     "deepseek",
+    "doubao",
     "napi",
     "oneshot",
     "reqwest",
@@ -11,6 +13,9 @@
     "thiserror",
     "threadsafe",
     "tsfn",
+    "unlisten",
+    "unlisteners",
+    "volc",
     "volcengine",
     "walkdir",
     "xuflow"

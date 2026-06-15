@@ -1,8 +1,16 @@
 <script setup lang="ts">
+import { onMounted } from "vue";
 import { NConfigProvider, NMessageProvider, zhCN, dateZhCN } from "naive-ui";
 import { useThemeStore } from "./stores/theme";
+import { useConfigStore } from "./stores/config";
 
 const themeStore = useThemeStore();
+const configStore = useConfigStore();
+
+onMounted(() => {
+  // Load API keys from environment variables on first launch
+  configStore.initFromEnv();
+});
 </script>
 
 <template>
@@ -52,5 +60,14 @@ body,
 
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.25);
+}
+
+/* Dark mode scrollbar */
+html.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
 }
 </style>
