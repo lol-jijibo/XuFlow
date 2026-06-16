@@ -15,8 +15,14 @@ const { setupListeners, teardownListeners } = useTauriEvent();
 const inputText = ref("");
 const scrollRef = ref<InstanceType<typeof NScrollbar> | null>(null);
 const sending = ref(false);
+// 'auto' = 完全自动执行无需确认, 'approval' = 操作需用户手动批准
+const permissionMode = ref<"auto" | "approval">("approval");
 
 const isEmpty = computed(() => store.messages.length === 0);
+
+function togglePermissionMode() {
+  permissionMode.value = permissionMode.value === "approval" ? "auto" : "approval";
+}
 
 onMounted(() => {
   setupListeners();
@@ -43,8 +49,19 @@ async function sendMessage() {
   // Validate that there is an active conversation before clearing input
   const projectStore = useProjectStore();
   if (!projectStore.activeConversation) {
-    console.error("[chat] No active conversation — cannot send message");
-    return;
+    // Auto-recover: create a default project + conversation if everything is gone
+    if (!projectStore.activeProject) {
+      const project = projectStore.createProject("默认项目");
+      projectStore.switchTo(project.id);
+    }
+    if (projectStore.activeProject && !projectStore.activeConversation) {
+      const conv = projectStore.createConversation(projectStore.activeProject.id, "默认会话");
+      projectStore.switchTo(projectStore.activeProject.id, conv.id);
+    }
+    if (!projectStore.activeConversation) {
+      console.error("[chat] Failed to create conversation — cannot send message");
+      return;
+    }
   }
 
   sending.value = true;
@@ -176,61 +193,82 @@ watch(
 
     <!-- Input area -->
     <div class="chat-footer">
-      <div class="input-container">
-        <div class="input-wrapper">
-          <NInput
-            v-model:value="inputText"
-            type="textarea"
-            placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
-            :autosize="{ minRows: 1, maxRows: 6 }"
-            :disabled="store.isRunning"
-            @keydown.enter.exact.prevent="sendMessage"
-            class="chat-input"
-          />
-          <div class="input-actions">
-            <NButton
-              v-if="store.isRunning"
-              type="warning"
-              size="small"
-              quaternary
-              @click="handleStop"
-            >
-              <template #icon>
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                  <rect
-                    x="3"
-                    y="3"
-                    width="10"
-                    height="10"
-                    rx="2"
-                    fill="currentColor"
-                  />
-                </svg>
-              </template>
-              停止
-            </NButton>
-            <NButton
-              v-else
-              type="primary"
-              size="small"
-              :loading="sending"
-              :disabled="!inputText.trim()"
-              @click="sendMessage"
-              class="send-btn"
-            >
-              <template #icon>
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                  <path
-                    d="M14 2L7 9M14 2l-4 12-3-5-5-3 12-4z"
-                    stroke="currentColor"
-                    stroke-width="1.4"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </svg>
-              </template>
-            </NButton>
-          </div>
+      <div class="input-area">
+        <NInput
+          v-model="inputText"
+          type="textarea"
+          placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
+          :autosize="{ minRows: 2, maxRows: 8 }"
+          :disabled="store.isRunning"
+          @keydown.enter.exact.prevent="sendMessage"
+          class="chat-input"
+        />
+      </div>
+      <div class="input-toolbar">
+        <div class="toolbar-left">
+          <!-- + 添加文件按钮 -->
+          <NButton quaternary circle size="small" title="添加文件" class="toolbar-btn">
+            <template #icon>
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                <path d="M9 3v12M3 9h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              </svg>
+            </template>
+          </NButton>
+          <!-- 权限模式切换 -->
+          <NButton
+            quaternary
+            size="small"
+            class="toolbar-btn permission-btn"
+            :class="{ auto: permissionMode === 'auto' }"
+            @click="togglePermissionMode"
+            :title="permissionMode === 'auto' ? '自动执行模式' : '请求授权模式'"
+          >
+            <template #icon>
+              <!-- auto: 闪电图标 -->
+              <svg v-if="permissionMode === 'auto'" width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M8.67 2L4 9h3.33L7.33 14 12 7H8.67L8.67 2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+              </svg>
+              <!-- approval: 盾牌图标 -->
+              <svg v-else width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M8 2l5 2.5v4c0 3.5-2.5 5.5-5 6.5-2.5-1-5-3-5-6.5v-4L8 2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+              </svg>
+            </template>
+          </NButton>
+        </div>
+        <div class="toolbar-right">
+          <span class="model-label">{{ configStore.activeModelName }}</span>
+          <!-- 运行中显示停止按钮 -->
+          <NButton
+            v-if="store.isRunning"
+            type="error"
+            size="small"
+            @click="handleStop"
+            class="send-btn"
+            title="停止生成"
+          >
+            <template #icon>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <rect x="3" y="3" width="10" height="10" rx="2" fill="currentColor"/>
+              </svg>
+            </template>
+          </NButton>
+          <!-- 发送按钮 -->
+          <NButton
+            v-else
+            type="primary"
+            size="small"
+            :loading="sending"
+            :disabled="!inputText.trim()"
+            @click="sendMessage"
+            class="send-btn"
+            title="发送"
+          >
+            <template #icon>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M4 8h8M10 5l3 3-3 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </template>
+          </NButton>
         </div>
       </div>
     </div>
@@ -242,12 +280,12 @@ watch(
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: #ffffff;
+  background: #f8fafc;
   transition: background-color 0.3s ease;
 }
 
 .chat-panel.dark {
-  background: #1c1c22;
+  background: #1a1a20;
 }
 
 /* Welcome */
@@ -310,7 +348,7 @@ watch(
   gap: 12px;
   padding: 14px 16px;
   background: #f8fafc;
-  border: 1px solid rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.08);
   border-radius: 10px;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -321,26 +359,26 @@ watch(
 
 .prompt-card:hover {
   background: #f1f5f9;
-  border-color: #6366f1;
+  border-color: #9ca3af;
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.15);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
 .chat-panel.dark .prompt-card {
-  background: #1c1c22;
-  border-color: rgba(255, 255, 255, 0.1);
+  background: #1a1a20;
+  border-color: rgba(255, 255, 255, 0.08);
   color: #94a3b8;
 }
 
 .chat-panel.dark .prompt-card:hover {
-  background: #28282f;
-  border-color: #6366f1;
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
+  background: #24242d;
+  border-color: #6b7280;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
 .prompt-card svg {
   flex-shrink: 0;
-  color: #6366f1;
+  color: #6b7280;
 }
 
 /* Messages */
@@ -349,83 +387,111 @@ watch(
 }
 
 .message-list {
-  padding: 24px;
-  max-width: 860px;
+  padding: 32px;
+  max-width: 1080px;
   margin: 0 auto;
 }
 
-/* Input area */
+/* ── Input area (single layer, no nesting) ── */
 .chat-footer {
-  padding: 16px 24px 20px;
-  border-top: 1px solid rgba(0, 0, 0, 0.06);
-  background: #fafafa;
-  transition: background-color 0.3s ease, border-color 0.3s ease;
-}
-
-.chat-panel.dark .chat-footer {
-  background: #1c1c22;
-  border-top-color: rgba(255, 255, 255, 0.06);
-}
-
-.input-container {
-  max-width: 860px;
+  padding: 12px 24px 16px;
+  max-width: 1080px;
+  width: 100%;
   margin: 0 auto;
 }
 
-.input-wrapper {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  background: #ffffff;
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  border-radius: 12px;
-  padding: 8px 12px;
-  transition: all 0.2s ease;
+/* 上行：文本输入 */
+.input-area {
+  margin-bottom: 8px;
 }
 
-.input-wrapper:focus-within {
-  border-color: #6366f1;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
-}
-
-.chat-panel.dark .input-wrapper {
-  background: #1c1c22;
-  border-color: rgba(255, 255, 255, 0.1);
-}
-
-.chat-panel.dark .input-wrapper:focus-within {
-  border-color: #6366f1;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
-}
-
-.chat-input {
-  flex: 1;
-}
-
-.chat-input :deep(.n-input__border),
-.chat-input :deep(.n-input__state-border) {
+.input-area :deep(.n-input__border),
+.input-area :deep(.n-input__state-border) {
   display: none;
 }
 
-.chat-input :deep(.n-input-wrapper) {
+.input-area :deep(.n-input-wrapper) {
   padding: 0;
-  background: transparent;
+  background: transparent !important;
 }
 
-.chat-input :deep(.n-input__textarea-el) {
+.input-area :deep(.n-input) {
+  background: transparent !important;
+}
+
+.input-area :deep(.n-input__textarea) {
+  background: transparent !important;
+}
+
+.input-area :deep(.n-input__textarea-el) {
   resize: none;
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.6;
+  background: transparent !important;
+  color: #1e293b;
 }
 
-.input-actions {
+.chat-panel.dark .input-area :deep(.n-input__textarea-el) {
+  color: #e2e8f0;
+}
+
+.chat-panel.dark .input-area :deep(.n-input__placeholder) {
+  color: #64748b !important;
+}
+
+/* 下行：工具栏 */
+.input-toolbar {
   display: flex;
   align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-  padding-bottom: 2px;
+  justify-content: space-between;
 }
 
+.toolbar-left,
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolbar-btn {
+  color: #94a3b8;
+}
+
+.toolbar-btn:hover {
+  color: #475569;
+}
+
+.chat-panel.dark .toolbar-btn {
+  color: #64748b;
+}
+
+.chat-panel.dark .toolbar-btn:hover {
+  color: #9ca3af;
+}
+
+/* 权限模式按钮 */
+.permission-btn.auto {
+  color: #22c55e;
+}
+
+.permission-btn.auto:hover {
+  color: #16a34a;
+}
+
+/* 模型名标签 */
+.model-label {
+  font-size: 11px;
+  color: #94a3b8;
+  font-family: "SF Mono", "Fira Code", monospace;
+  margin-right: 4px;
+  user-select: none;
+}
+
+.chat-panel.dark .model-label {
+  color: #64748b;
+}
+
+/* 发送 / 停止按钮 */
 .send-btn {
   width: 32px;
   height: 32px;
@@ -433,5 +499,6 @@ watch(
   display: flex;
   align-items: center;
   justify-content: center;
+  border-radius: 50%;
 }
 </style>

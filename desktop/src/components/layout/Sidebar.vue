@@ -479,11 +479,11 @@ function handleDeleteConversation(projectId: string, convId: string) {
 }
 
 .project-item.active > .project-row {
-  background: rgba(79, 70, 229, 0.08);
+  background: rgba(107, 114, 128, 0.1);
 }
 
 .sidebar.dark .project-item.active > .project-row {
-  background: rgba(99, 102, 241, 0.15);
+  background: rgba(107, 114, 128, 0.2);
 }
 
 .project-row {
@@ -517,11 +517,11 @@ function handleDeleteConversation(projectId: string, convId: string) {
 
 .project-icon {
   flex-shrink: 0;
-  color: #6366f1;
+  color: #6b7280;
 }
 
 .sidebar.dark .project-icon {
-  color: #818cf8;
+  color: #9ca3af;
 }
 
 .project-name {
@@ -530,10 +530,11 @@ function handleDeleteConversation(projectId: string, convId: string) {
   overflow: hidden;
   text-overflow: ellipsis;
   font-weight: 500;
+  color: #1e293b;
 }
 
 .sidebar.dark .project-name {
-  color: #e2e8f0;
+  color: #ffffff;
 }
 
 .add-conv-btn {
@@ -568,11 +569,11 @@ function handleDeleteConversation(projectId: string, convId: string) {
 }
 
 .conversation-item.active {
-  background: rgba(79, 70, 229, 0.08);
+  background: rgba(107, 114, 128, 0.1);
 }
 
 .sidebar.dark .conversation-item.active {
-  background: rgba(99, 102, 241, 0.15);
+  background: rgba(107, 114, 128, 0.2);
 }
 
 .conv-icon {
@@ -593,7 +594,7 @@ function handleDeleteConversation(projectId: string, convId: string) {
 }
 
 .sidebar.dark .conv-title {
-  color: #94a3b8;
+  color: #e2e8f0;
 }
 
 .conv-delete-btn {

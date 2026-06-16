@@ -73,22 +73,22 @@ const isAssistant = computed(() => props.message.role === "assistant");
 
 /* User bubble */
 .bubble-user {
-  background: linear-gradient(135deg, #6366f1, #7c3aed);
+  background: linear-gradient(135deg, #6b7280, #4b5563);
   color: #fff;
   border-radius: 14px 14px 4px 14px;
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.2);
+  box-shadow: 0 2px 8px rgba(107, 114, 128, 0.2);
 }
 
 /* AI bubble */
 .bubble-ai {
   background: #f8fafc;
-  border: 1px solid rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.08);
   border-radius: 14px 14px 14px 4px;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
 }
 
 .dark .bubble-ai {
-  background: #1c1c22;
+  background: #1a1a20;
   border-color: rgba(255, 255, 255, 0.08);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
 }
@@ -108,12 +108,12 @@ const isAssistant = computed(() => props.message.role === "assistant");
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #6366f1;
+  background: #6b7280;
   animation: blink 1.4s infinite both;
 }
 
 .dark .dot {
-  background: #818cf8;
+  background: #9ca3af;
 }
 
 .dot:nth-child(2) {

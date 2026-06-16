@@ -5,6 +5,7 @@
     "deepseek",
     "doubao",
     "napi",
+    "nsis",
     "oneshot",
     "reqwest",
     "rusqlite",

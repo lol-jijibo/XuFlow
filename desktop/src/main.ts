@@ -15,7 +15,7 @@ const router = createRouter({
 app.use(router);
 app.use(createPinia());
 
-app.config.errorHandler = (err, instance, info) => {
+app.config.errorHandler = (err, _instance, info) => {
   console.error("[Vue error]", err, info);
 };
 

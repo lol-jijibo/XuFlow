@@ -17,10 +17,10 @@ export const useThemeStore = defineStore("theme", () => {
     if (isDark.value) {
       return {
         common: {
-          primaryColor: "#6366f1",
-          primaryColorHover: "#818cf8",
-          primaryColorPressed: "#4f46e5",
-          primaryColorSuppl: "rgba(99,102,241,0.15)",
+          primaryColor: "#6b7280",
+          primaryColorHover: "#9ca3af",
+          primaryColorPressed: "#4b5563",
+          primaryColorSuppl: "rgba(107,114,128,0.15)",
           borderRadius: "8px",
           borderRadiusSmall: "6px",
           fontFamily:
@@ -39,10 +39,10 @@ export const useThemeStore = defineStore("theme", () => {
     }
     return {
       common: {
-        primaryColor: "#4f46e5",
-        primaryColorHover: "#6366f1",
-        primaryColorPressed: "#4338ca",
-        primaryColorSuppl: "rgba(79,70,229,0.08)",
+        primaryColor: "#4b5563",
+        primaryColorHover: "#6b7280",
+        primaryColorPressed: "#374151",
+        primaryColorSuppl: "rgba(75,85,99,0.08)",
         borderRadius: "8px",
         borderRadiusSmall: "6px",
         fontFamily:

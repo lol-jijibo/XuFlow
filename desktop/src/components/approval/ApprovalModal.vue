@@ -184,7 +184,7 @@ async function reject() {
 .tool-name {
   font-family: monospace;
   font-weight: 600;
-  color: #6366f1;
+  color: #6b7280;
 }
 
 .approval-params {

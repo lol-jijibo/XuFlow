@@ -7,9 +7,10 @@ import { useConfigStore } from "./stores/config";
 const themeStore = useThemeStore();
 const configStore = useConfigStore();
 
-onMounted(() => {
-  // Load API keys from environment variables on first launch
-  configStore.initFromEnv();
+onMounted(async () => {
+  // Config is auto-loaded from localStorage in the store definition.
+  // Try env vars as fallback for API keys.
+  await configStore.initFromEnv();
 });
 </script>
 

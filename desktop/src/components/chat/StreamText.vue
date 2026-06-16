@@ -116,17 +116,17 @@ const renderedHtml = computed(() => {
 
 /* Inline code */
 .markdown-body :deep(code:not(.hljs)) {
-  background: rgba(99, 102, 241, 0.1);
+  background: rgba(107, 114, 128, 0.12);
   padding: 2px 6px;
   border-radius: 5px;
   font-size: 0.9em;
   font-family: "SF Mono", "Fira Code", monospace;
-  color: #6366f1;
+  color: #6b7280;
 }
 
 .dark.markdown-body :deep(code:not(.hljs)) {
-  background: rgba(99, 102, 241, 0.2);
-  color: #818cf8;
+  background: rgba(107, 114, 128, 0.2);
+  color: #9ca3af;
 }
 
 /* Paragraphs */
@@ -151,17 +151,17 @@ const renderedHtml = computed(() => {
 
 /* Blockquotes */
 .markdown-body :deep(blockquote) {
-  border-left: 3px solid #6366f1;
+  border-left: 3px solid #6b7280;
   margin: 10px 0;
   padding: 6px 14px;
   color: #64748b;
-  background: rgba(99, 102, 241, 0.04);
+  background: rgba(107, 114, 128, 0.04);
   border-radius: 0 8px 8px 0;
 }
 
 .dark.markdown-body :deep(blockquote) {
   color: #94a3b8;
-  background: rgba(99, 102, 241, 0.08);
+  background: rgba(107, 114, 128, 0.08);
 }
 
 /* Tables */
@@ -191,19 +191,19 @@ const renderedHtml = computed(() => {
 }
 
 .dark.markdown-body :deep(th) {
-  background: #1c1c22;
+  background: #1a1a20;
 }
 
 /* Links */
 .markdown-body :deep(a) {
-  color: #6366f1;
+  color: #6b7280;
   text-decoration: none;
   border-bottom: 1px solid transparent;
   transition: border-color 0.2s ease;
 }
 
 .markdown-body :deep(a:hover) {
-  border-bottom-color: #6366f1;
+  border-bottom-color: #6b7280;
 }
 
 /* Headings */

@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, computed, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import type { SelectMixedOption } from "naive-ui";
+import type { SelectOption, SelectGroupOption } from "naive-ui";
 
 export type Provider = "deepseek" | "volcengine";
 
@@ -158,7 +158,7 @@ export const useConfigStore = defineStore("config", () => {
   );
 
   /** Grouped model options for NSelect */
-  const modelOptions = computed<SelectMixedOption[]>(() => [
+  const modelOptions = computed<Array<SelectOption | SelectGroupOption>>(() => [
     {
       type: "group",
       label: "DeepSeek 官方",

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NText, NTag } from "naive-ui";
+import { NText } from "naive-ui";
 import { useAgentStore } from "../../stores/agent";
 import { useProjectStore } from "../../stores/project";
 import { useThemeStore } from "../../stores/theme";
