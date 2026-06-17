@@ -1,108 +1,112 @@
 <script setup lang="ts">
-import { NText } from "naive-ui";
+import { computed } from "vue";
 import { useAgentStore } from "../../stores/agent";
-import { useProjectStore } from "../../stores/project";
 import { useThemeStore } from "../../stores/theme";
-import { useConfigStore } from "../../stores/config";
 
 const agentStore = useAgentStore();
-const projectStore = useProjectStore();
 const themeStore = useThemeStore();
-const configStore = useConfigStore();
+
+const statusText = computed(() => {
+  return agentStore.isRunning ? "\u{1F504} 生成中..." : "⚡ 就绪";
+});
+
+const appVersion = "v1.0.2";
 </script>
 
 <template>
   <div class="status-bar" :class="{ dark: themeStore.isDark }">
     <div class="status-left">
-      <div class="status-indicator" :class="{ running: agentStore.isRunning }">
-        <span class="indicator-dot"></span>
-        <NText depth="3" class="status-text">
-          {{ agentStore.isRunning ? "运行中" : "就绪" }}
-        </NText>
-      </div>
+      <span class="project-label">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" class="project-icon-svg">
+          <path d="M2 4.5A1.5 1.5 0 013.5 3h2.63a1.5 1.5 0 011.06.44l.77.77a1.5 1.5 0 001.06.44H12.5A1.5 1.5 0 0114 6.15V12.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 12.5V4.5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+        </svg>
+        <span>Xuflow 本地</span>
+      </span>
     </div>
     <div class="status-right">
-      <NText depth="3" class="status-text model-name">
-        {{ configStore.activeModelId }}
-      </NText>
-      <span class="status-divider">|</span>
-      <NText depth="3" class="status-text" v-if="projectStore.activeProject">
-        {{ projectStore.activeProject.name }}
-      </NText>
+      <span class="status-label">{{ statusText }}</span>
+      <span class="version-label">{{ appVersion }}</span>
     </div>
   </div>
 </template>
 
 <style scoped>
 .status-bar {
-  height: 28px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 16px;
-  border-top: 1px solid rgba(0, 0, 0, 0.06);
-  background: #fafafa;
   flex-shrink: 0;
-  transition: background-color 0.3s ease, border-color 0.3s ease;
+  background: #f3f4f6;
+  transition: background-color 0.3s ease;
+  user-select: none;
 }
 
 .status-bar.dark {
-  background: #101014;
-  border-top-color: rgba(255, 255, 255, 0.06);
+  background: #26272B;
 }
 
-.status-left,
+/* ── Left: status ────────────────────────── */
+
+.status-left {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.project-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 450;
+  color: #9ca3af;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+
+.project-icon-svg {
+  color: #9ca3af;
+  flex-shrink: 0;
+}
+
+.dark .project-label,
+.dark .project-icon-svg {
+  color: #9ca3af;
+}
+
+.status-label {
+  font-size: 11px;
+  font-weight: 450;
+  color: #6b7280;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+
+.dark .status-label {
+  color: #9ca3af;
+}
+
+/* ── Right: version ──────────────────────── */
+
 .status-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  flex-shrink: 0;
 }
 
-.status-indicator {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.indicator-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #94a3b8;
-  transition: background-color 0.3s ease;
-}
-
-.status-indicator.running .indicator-dot {
-  background: #22c55e;
-  box-shadow: 0 0 6px rgba(34, 197, 94, 0.5);
-  animation: pulse 2s infinite;
-}
-
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.5;
-  }
-}
-
-.status-text {
-  font-size: 12px;
-}
-
-.model-name {
-  font-family: monospace;
+.version-label {
   font-size: 11px;
+  font-weight: 450;
+  color: #9ca3af;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+  font-family: "SF Mono", "Cascadia Code", "Fira Code", "JetBrains Mono", monospace;
 }
 
-.status-divider {
-  color: #94a3b8;
-  font-size: 10px;
-}
-
-.dark .status-divider {
-  color: #475569;
+.dark .version-label {
+  color: #6b7280;
 }
 </style>

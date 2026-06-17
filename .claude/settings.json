@@ -16,7 +16,14 @@
       "Bash(rm -rf \"C:/Users/Lenovo/.claude/file-history\" && echo \"✅ file-history 已删除 \\(15MB\\)\")",
       "Bash(npm run *)",
       "Bash(pnpm --filter xuflow-desktop exec vite build)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(curl -s http://localhost:5173)",
+      "Bash(taskkill //F //IM node.exe)",
+      "Bash(git -C \"D:\\\\Projects-star\\\\Xuflow\" remote -v)",
+      "Bash(git -C \"D:\\\\Projects-star\\\\Xuflow\" log --oneline -5)",
+      "Bash(git -C \"D:\\\\Projects-star\\\\Xuflow\" rev-parse --git-dir)",
+      "Bash(dir \"C:/Users/Lenovo/AppData/Local/Packages/\")",
+      "Bash(docker system *)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Lenovo\\.claude\\plans",

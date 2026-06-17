@@ -9,7 +9,7 @@ import { useThemeStore } from "../stores/theme";
 const router = useRouter();
 const themeStore = useThemeStore();
 
-const activeSection = ref("api-keys");
+const activeSection = ref("appearance");
 
 function renderIcon(icon: string) {
   return () => h("span", { class: "menu-icon", innerHTML: icon });
@@ -32,7 +32,14 @@ const infoIcon = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
   <path d="M10 9v5M10 6v1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
 </svg>`;
 
+const appearanceIcon = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+  <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.6"/>
+  <path d="M10 2v4M10 14v4M2 10h4M14 10h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+  <circle cx="10" cy="10" r="3" stroke="currentColor" stroke-width="1.6"/>
+</svg>`;
+
 const menuOptions: MenuOption[] = [
+  { label: "外观", key: "appearance", icon: renderIcon(appearanceIcon) },
   { label: "API 密钥", key: "api-keys", icon: renderIcon(keyIcon) },
   { label: "接入点管理", key: "endpoints", icon: renderIcon(gridIcon) },
   { label: "关于", key: "about", icon: renderIcon(infoIcon) },

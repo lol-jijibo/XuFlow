@@ -18,90 +18,92 @@ const isAssistant = computed(() => props.message.role === "assistant");
     class="message-item"
     :class="{ user: isUser, assistant: isAssistant, dark: themeStore.isDark }"
   >
-    <!-- Bubble -->
-    <div
-      class="bubble"
-      :class="{ 'bubble-user': isUser, 'bubble-ai': isAssistant }"
-    >
-      <div class="bubble-content" v-if="message.content">
+    <!-- ── User message: minimal right-aligned pill ── -->
+    <template v-if="isUser">
+      <div class="user-pill">
+        <span class="user-pill-text">{{ message.content }}</span>
+      </div>
+    </template>
+
+    <!-- ── AI message: left-aligned, no bubble, pure structured text ── -->
+    <template v-else-if="isAssistant">
+      <div class="agent-block">
         <StreamText
-          v-if="isAssistant"
           :text="message.content"
           :done="message.done"
         />
-        <span v-else>{{ message.content }}</span>
+        <!-- Typing indicator when streaming empty -->
+        <div
+          v-if="!message.content && !message.done"
+          class="typing-indicator"
+        >
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+        </div>
       </div>
-      <div
-        v-if="isAssistant && !message.content && !message.done"
-        class="typing-indicator"
-      >
-        <span class="dot"></span>
-        <span class="dot"></span>
-        <span class="dot"></span>
-      </div>
-    </div>
+    </template>
   </div>
 </template>
 
 <style scoped>
+/* ── Message container ── */
 .message-item {
   display: flex;
   align-items: flex-start;
-  margin-bottom: 24px;
+  margin-bottom: 36px;
+  padding: 0;
 }
 
 .message-item.user {
   justify-content: flex-end;
 }
 
-/* Bubble base */
-.bubble {
+.message-item.assistant {
+  justify-content: flex-start;
+}
+
+/* ── User pill — minimal tag, no bubble ── */
+.user-pill {
   max-width: 75%;
-  padding: 12px 16px;
-  line-height: 1.7;
+  background: #2E3036;
+  padding: 10px 18px;
+  border-radius: 10px;
+  transition: background 0.2s ease;
+}
+
+.dark .user-pill {
+  background: #2E3036;
+}
+
+.message-item:not(.dark) .user-pill {
+  background: #e5e5e5;
+}
+
+.user-pill-text {
+  font-size: 15px;
+  line-height: 1.65;
+  color: #e4e4e7;
   word-break: break-word;
-  transition: all 0.2s ease;
+  white-space: pre-wrap;
 }
 
-.bubble-user {
-  max-width: 70%;
+.message-item:not(.dark) .user-pill-text {
+  color: #1e293b;
 }
 
-.bubble-ai {
-  max-width: 85%;
+/* ── Agent block — full-width structured text ── */
+.agent-block {
+  width: 100%;
+  padding: 0;
+  /* no bubble, no border, no background */
 }
 
-/* User bubble */
-.bubble-user {
-  background: linear-gradient(135deg, #6b7280, #4b5563);
-  color: #fff;
-  border-radius: 14px 14px 4px 14px;
-  box-shadow: 0 2px 8px rgba(107, 114, 128, 0.2);
-}
-
-/* AI bubble */
-.bubble-ai {
-  background: #f8fafc;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 14px 14px 14px 4px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
-}
-
-.dark .bubble-ai {
-  background: #1a1a20;
-  border-color: rgba(255, 255, 255, 0.08);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
-}
-
-.bubble-content {
-  font-size: 14px;
-}
-
-/* Typing indicator */
+/* ── Typing indicator ── */
 .typing-indicator {
   display: flex;
   gap: 6px;
-  padding: 6px 0;
+  padding: 8px 0;
 }
 
 .dot {
@@ -125,9 +127,7 @@ const isAssistant = computed(() => props.message.role === "assistant");
 }
 
 @keyframes blink {
-  0%,
-  80%,
-  100% {
+  0%, 80%, 100% {
     opacity: 0.3;
     transform: scale(0.8);
   }

@@ -10,6 +10,10 @@ export interface ChatMessage {
 export interface Conversation {
   id: string;
   title: string;
+  /** How the title was set: 'default' (新会话 N), 'auto' (AI summary), 'manual' (user typed) */
+  titleSource?: "default" | "auto" | "manual";
+  /** Whether the conversation is visible in the sidebar. Hidden until first AI response completes. */
+  visible?: boolean;
   messages: ChatMessage[];
   createdAt: number;
   updatedAt: number;
@@ -70,7 +74,8 @@ export const useProjectStore = defineStore("project", () => {
   const activeProjectId = ref<string | null>(saved.activeProjectId);
   const activeConversationId = ref<string | null>(saved.activeConversationId);
 
-  /** Validate that saved IDs still point to real objects; fall back to first available */
+  /** Validate that saved IDs still point to real objects; fall back to first available.
+   *  Skips invisible conversations when picking a fallback. */
   function validateState() {
     // Validate active project
     const project = projects.value.find((p) => p.id === activeProjectId.value);
@@ -81,7 +86,9 @@ export const useProjectStore = defineStore("project", () => {
     const activeProj = projects.value.find((p) => p.id === activeProjectId.value);
     const conv = activeProj?.conversations.find((c) => c.id === activeConversationId.value);
     if (!conv) {
-      activeConversationId.value = activeProj?.conversations[0]?.id ?? null;
+      // Fall back to first visible conversation, or any conversation if none visible
+      const visibleConvs = activeProj?.conversations.filter((c) => c.visible !== false) ?? [];
+      activeConversationId.value = visibleConvs[0]?.id ?? activeProj?.conversations[0]?.id ?? null;
     }
   }
 
@@ -147,12 +154,14 @@ export const useProjectStore = defineStore("project", () => {
     persist();
   }
 
-  function createConversation(projectId: string, title?: string): Conversation {
+  function createConversation(projectId: string, title?: string, titleSource?: "default" | "manual", visible = true): Conversation {
     const project = projects.value.find((p) => p.id === projectId);
     if (!project) throw new Error(`Project ${projectId} not found`);
     const conv: Conversation = {
       id: uid(),
       title: title || `新会话 ${project.conversations.length + 1}`,
+      titleSource: titleSource ?? (title ? "manual" : "default"),
+      visible,
       messages: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -192,6 +201,47 @@ export const useProjectStore = defineStore("project", () => {
     persist();
   }
 
+  /** Update a conversation's title and optionally mark its source.
+   *  Respects manual titles — won't overwrite if the current source is 'manual'. */
+  function updateConversationTitle(
+    projectId: string,
+    convId: string,
+    title: string,
+    source: "auto" | "manual" = "auto"
+  ): boolean {
+    const project = projects.value.find((p) => p.id === projectId);
+    if (!project) return false;
+    const conv = project.conversations.find((c) => c.id === convId);
+    if (!conv) return false;
+
+    // Never overwrite a manually-set title with an auto-generated one
+    if (source === "auto" && conv.titleSource === "manual") {
+      return false;
+    }
+
+    conv.title = title;
+    conv.titleSource = source;
+    conv.updatedAt = Date.now();
+    project.updatedAt = Date.now();
+    persist();
+    return true;
+  }
+
+  /** Make a previously-hidden conversation visible in the sidebar.
+   *  Called after the first AI response completes. */
+  function revealConversation(projectId: string, convId: string): boolean {
+    const project = projects.value.find((p) => p.id === projectId);
+    if (!project) return false;
+    const conv = project.conversations.find((c) => c.id === convId);
+    if (!conv) return false;
+    if (conv.visible !== false) return false; // already visible
+    conv.visible = true;
+    conv.updatedAt = Date.now();
+    project.updatedAt = Date.now();
+    persist();
+    return true;
+  }
+
   // Initialize: default project + default conversation (only on first launch)
   if (projects.value.length === 0) {
     const defaultProject = createProject("默认项目");
@@ -215,5 +265,7 @@ export const useProjectStore = defineStore("project", () => {
     deleteConversation,
     switchTo,
     persistMessages,
+    updateConversationTitle,
+    revealConversation,
   };
 });

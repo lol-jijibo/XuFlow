@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NCard, NForm, NFormItem, NInput, NButton, NText } from "naive-ui";
+import { NCard, NForm, NFormItem, NInput, NButton, NText, NSlider } from "naive-ui";
 import { ref, watch, onBeforeUnmount } from "vue";
 import { useConfigStore, ALL_MODELS } from "../../stores/config";
 import { useAgentStore } from "../../stores/agent";
@@ -47,6 +47,162 @@ async function applyToBackend() {
 
 <template>
   <div class="settings-panel" :class="{ dark: themeStore.isDark }">
+    <!-- 外观 -->
+    <div v-if="props.activeSection === 'appearance'" class="section">
+      <h2 class="section-title">外观</h2>
+      <p class="section-desc">自定义 Xuflow 的主题、字体大小与对比度。</p>
+
+      <!-- 主题 -->
+      <NCard class="settings-card" style="margin-bottom: 20px">
+        <template #header>
+          <div class="card-header">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.6" />
+              <path d="M10 2v4M10 14v4M2 10h4M14 10h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+              <circle cx="10" cy="10" r="3" stroke="currentColor" stroke-width="1.6" />
+            </svg>
+            <span>主题</span>
+          </div>
+        </template>
+        <div class="theme-cards">
+          <div
+            class="theme-card"
+            :class="{ active: themeStore.variant === 'sunset' }"
+            @click="themeStore.setVariant('sunset')"
+          >
+            <div class="theme-preview sunset-preview">
+              <div class="preview-dot"></div>
+              <div class="preview-line"></div>
+            </div>
+            <span class="theme-label">日落</span>
+            <span class="theme-desc">深色暖调</span>
+          </div>
+          <div
+            class="theme-card"
+            :class="{ active: themeStore.variant === 'dawn' }"
+            @click="themeStore.setVariant('dawn')"
+          >
+            <div class="theme-preview dawn-preview">
+              <div class="preview-dot"></div>
+              <div class="preview-line"></div>
+            </div>
+            <span class="theme-label">晨曦</span>
+            <span class="theme-desc">浅色暖调</span>
+          </div>
+          <div
+            class="theme-card"
+            :class="{ active: themeStore.variant === 'system' }"
+            @click="themeStore.setVariant('system')"
+          >
+            <div class="theme-preview system-preview">
+              <div class="preview-dot"></div>
+              <div class="preview-line"></div>
+            </div>
+            <span class="theme-label">系统</span>
+            <span class="theme-desc">跟随系统</span>
+          </div>
+        </div>
+      </NCard>
+
+      <!-- UI 字体大小 -->
+      <NCard class="settings-card" style="margin-bottom: 20px">
+        <template #header>
+          <div class="card-header">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M4 6h12M4 10h8M4 14h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+            </svg>
+            <span>UI 字体大小</span>
+          </div>
+        </template>
+        <div class="slider-section">
+          <div class="slider-label-row">
+            <span class="slider-desc">调整消息区域 AI 生成文本与用户提示词的大小</span>
+            <span class="slider-value">{{ themeStore.uiFontSize }}px</span>
+          </div>
+          <NSlider
+            :value="themeStore.uiFontSize"
+            @update:value="themeStore.setUiFontSize($event)"
+            :min="12"
+            :max="20"
+            :step="1"
+            :marks="{ 12: '12', 14: '14', 16: '16', 18: '18', 20: '20' }"
+          />
+          <div class="preview-row">
+            <div class="ui-preview-bubble user-preview" :style="{ fontSize: themeStore.uiFontSize + 'px' }">
+              用户消息预览
+            </div>
+            <div class="ui-preview-bubble ai-preview" :style="{ fontSize: themeStore.uiFontSize + 'px' }">
+              AI 回复文本预览
+            </div>
+          </div>
+        </div>
+      </NCard>
+
+      <!-- 代码字体大小 -->
+      <NCard class="settings-card" style="margin-bottom: 20px">
+        <template #header>
+          <div class="card-header">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M6 5l-4 5 4 5M14 5l4 5-4 5M12 2l-4 16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <span>代码字体大小</span>
+          </div>
+        </template>
+        <div class="slider-section">
+          <div class="slider-label-row">
+            <span class="slider-desc">调整 Markdown 代码块中代码的字号</span>
+            <span class="slider-value">{{ themeStore.codeFontSize }}px</span>
+          </div>
+          <NSlider
+            :value="themeStore.codeFontSize"
+            @update:value="themeStore.setCodeFontSize($event)"
+            :min="11"
+            :max="18"
+            :step="1"
+            :marks="{ 11: '11', 13: '13', 15: '15', 18: '18' }"
+          />
+          <div class="code-preview-block" :style="{ fontSize: themeStore.codeFontSize + 'px' }">
+            <code>const greeting = "Hello, Xuflow!";</code>
+          </div>
+        </div>
+      </NCard>
+
+      <!-- 对比度 -->
+      <NCard class="settings-card">
+        <template #header>
+          <div class="card-header">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.6" />
+              <path d="M10 2a8 8 0 000 16V2z" fill="currentColor" />
+            </svg>
+            <span>对比度</span>
+          </div>
+        </template>
+        <div class="slider-section">
+          <div class="slider-label-row">
+            <span class="slider-desc">调整界面文字与背景的对比强度</span>
+            <span class="slider-value">{{ themeStore.contrast }}%</span>
+          </div>
+          <NSlider
+            :value="themeStore.contrast"
+            @update:value="themeStore.setContrast($event)"
+            :min="80"
+            :max="150"
+            :step="5"
+            :marks="{ 80: '80%', 100: '100%', 120: '120%', 150: '150%' }"
+          />
+          <div class="contrast-swatches">
+            <div class="contrast-swatch" v-for="lvl in [80, 100, 120, 150]" :key="lvl"
+              :class="{ active: themeStore.contrast === lvl }"
+              :style="{ filter: `contrast(${themeStore.contrast}%)` }">
+              <span class="swatch-text">Aa</span>
+              <span class="swatch-label">{{ lvl }}%</span>
+            </div>
+          </div>
+        </div>
+      </NCard>
+    </div>
+
     <!-- API 密钥 -->
     <div v-if="props.activeSection === 'api-keys'" class="section">
       <h2 class="section-title">API 密钥</h2>
@@ -197,6 +353,272 @@ async function applyToBackend() {
 }
 
 .dark .about-desc {
+  color: #94a3b8;
+}
+
+/* ── 外观 / Appearance ── */
+
+/* 主题卡片选择 */
+.theme-cards {
+  display: flex;
+  gap: 12px;
+}
+
+.theme-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 12px;
+  border: 2px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background: #fafafa;
+}
+
+.theme-card:hover {
+  border-color: #9ca3af;
+  background: #f1f5f9;
+  transform: translateY(-1px);
+}
+
+.theme-card.active {
+  border-color: #6b7280;
+  background: rgba(107, 114, 128, 0.06);
+  box-shadow: 0 2px 8px rgba(107, 114, 128, 0.15);
+}
+
+.dark .theme-card {
+  background: #1c1c22;
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.dark .theme-card:hover {
+  border-color: #6b7280;
+  background: #24242d;
+}
+
+.dark .theme-card.active {
+  border-color: #9ca3af;
+  background: rgba(156, 163, 175, 0.1);
+}
+
+/* 主题预览色块 */
+.theme-preview {
+  width: 48px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 6px 8px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.sunset-preview {
+  background: linear-gradient(135deg, #2d2d38 0%, #3d3430 100%);
+}
+
+.sunset-preview .preview-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f0a060;
+}
+
+.sunset-preview .preview-line {
+  width: 24px;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(240, 160, 96, 0.5);
+}
+
+.dawn-preview {
+  background: linear-gradient(135deg, #fef7ed 0%, #fef3e2 100%);
+}
+
+.dawn-preview .preview-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e89440;
+}
+
+.dawn-preview .preview-line {
+  width: 24px;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(232, 148, 64, 0.4);
+}
+
+.system-preview {
+  background: linear-gradient(135deg, #f8fafc 0%, #1a1a20 100%);
+}
+
+.system-preview .preview-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #6b7280;
+}
+
+.system-preview .preview-line {
+  width: 24px;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(107, 114, 128, 0.5);
+}
+
+.theme-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.dark .theme-label {
+  color: #e2e8f0;
+}
+
+.theme-desc {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+/* 滑块区域 */
+.slider-section {
+  padding: 4px 0;
+}
+
+.slider-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.slider-desc {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.dark .slider-desc {
+  color: #94a3b8;
+}
+
+.slider-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: #6b7280;
+  background: rgba(107, 114, 128, 0.08);
+  padding: 2px 10px;
+  border-radius: 6px;
+  min-width: 48px;
+  text-align: center;
+}
+
+.dark .slider-value {
+  color: #9ca3af;
+  background: rgba(156, 163, 175, 0.12);
+}
+
+/* UI 字体预览气泡 */
+.preview-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.ui-preview-bubble {
+  flex: 1;
+  padding: 10px 14px;
+  border-radius: 10px;
+  line-height: 1.5;
+}
+
+.user-preview {
+  background: linear-gradient(135deg, #6b7280, #4b5563);
+  color: #fff;
+  border-radius: 12px 12px 4px 12px;
+  text-align: right;
+}
+
+.ai-preview {
+  background: #f8fafc;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  color: #1e293b;
+  border-radius: 12px 12px 12px 4px;
+  text-align: left;
+}
+
+.dark .ai-preview {
+  background: #1a1a20;
+  border-color: rgba(255, 255, 255, 0.08);
+  color: #e2e8f0;
+}
+
+/* 代码字体预览块 */
+.code-preview-block {
+  margin-top: 14px;
+  background: #24242b;
+  border-radius: 10px;
+  padding: 12px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  overflow-x: auto;
+}
+
+.code-preview-block code {
+  color: #e2e8f0;
+  font-family: "SF Mono", "Fira Code", monospace;
+}
+
+/* 对比度色块 */
+.contrast-swatches {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.contrast-swatch {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 2px solid rgba(0, 0, 0, 0.06);
+  transition: border-color 0.2s ease;
+}
+
+.contrast-swatch.active {
+  border-color: #6b7280;
+}
+
+.dark .contrast-swatch {
+  background: #1c1c22;
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.dark .contrast-swatch.active {
+  border-color: #9ca3af;
+}
+
+.swatch-text {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.dark .swatch-text {
+  color: #e2e8f0;
+}
+
+.swatch-label {
+  font-size: 11px;
   color: #94a3b8;
 }
 </style>

@@ -28,6 +28,7 @@ pub fn run() {
             commands::chat::send_message,
             commands::chat::stop_generation,
             commands::chat::respond_approval,
+            commands::chat::generate_title,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

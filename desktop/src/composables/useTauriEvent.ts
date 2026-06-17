@@ -1,6 +1,7 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useAgentStore, ToolCall, ToolResult } from "../stores/agent";
 import { useProjectStore } from "../stores/project";
+import { trySummarizeConversation } from "./useConversationSummary";
 
 export function useTauriEvent() {
   const agentStore = useAgentStore();
@@ -63,6 +64,15 @@ export function useTauriEvent() {
           lastMsg.content += `\n\n> 🔧 **${tc.name}** \`${tc.arguments.slice(0, 120)}\`\n`;
           schedulePersist();
         }
+        // Track file path for read_file / write_file tools
+        if (tc.name === "read_file" || tc.name === "write_file") {
+          try {
+            const args = JSON.parse(tc.arguments);
+            if (args.path) {
+              agentStore.setLastFilePath(args.path);
+            }
+          } catch { /* ignore parse errors */ }
+        }
       })
     );
 
@@ -97,15 +107,25 @@ export function useTauriEvent() {
     unlisteners.push(
       await listen("agent:done", () => {
         const conv = projectStore.activeConversation;
+        const project = projectStore.activeProject;
         if (conv) {
           const msgs = conv.messages;
           const lastMsg = msgs[msgs.length - 1];
           if (lastMsg && lastMsg.role === "assistant") {
             lastMsg.done = true;
           }
+          // Reveal hidden conversation in sidebar (created via "新会话" button)
+          if (conv.visible === false && project) {
+            projectStore.revealConversation(project.id, conv.id);
+          }
         }
         agentStore.isRunning = false;
         flushPersist();
+
+        // Trigger conversation summary (non-blocking, fire-and-forget)
+        trySummarizeConversation().catch((e) =>
+          console.warn("[summary] trySummarizeConversation error:", e)
+        );
       })
     );
 

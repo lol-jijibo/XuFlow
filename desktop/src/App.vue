@@ -41,6 +41,11 @@ body,
   transition: background-color 0.3s ease, color 0.3s ease;
 }
 
+/* Contrast is applied at the app root so it modulates all UI text/background */
+#app {
+  filter: contrast(var(--xuflow-contrast, 1));
+}
+
 * {
   box-sizing: border-box;
 }

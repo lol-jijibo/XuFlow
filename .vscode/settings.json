@@ -1,15 +1,22 @@
 {
   "cSpell.words": [
+    "adfbd",
     "cdylib",
+    "codegraph",
     "conv",
     "deepseek",
     "doubao",
+    "fuser",
     "napi",
     "nsis",
     "oneshot",
     "reqwest",
     "rusqlite",
+    "rustc",
+    "rustup",
     "serde",
+    "setx",
+    "taskkill",
     "Tauri",
     "thiserror",
     "threadsafe",
@@ -19,6 +26,7 @@
     "volc",
     "volcengine",
     "walkdir",
+    "winget",
     "xuflow"
   ]
 }

@@ -7,7 +7,7 @@ use xuflow_core::{
     agent::loop_::AgentLoop,
     agent::system_prompt::SYSTEM_PROMPT,
     agent::types::ApprovalHandler,
-    backends::{LlmBackend, StreamEvent},
+    backends::{ChatMessage, ChatParams, LlmBackend, StreamEvent},
     backends::deepseek::DeepSeekBackend,
     backends::volcengine::VolcEngineBackend,
     tools::{bash::BashTool, file::{ReadFileTool, WriteFileTool, ListDirTool}, grep::GrepTool, web::WebFetchTool, ToolRegistry},
@@ -230,4 +230,119 @@ pub async fn stop_generation(
 ) -> Result<(), String> {
     state.cancelled.store(true, Ordering::SeqCst);
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Title summarization — non-streaming, no-tool chat for conversation titles
+// ---------------------------------------------------------------------------
+
+/// Run a simple non-streaming completion through the backend, collecting all
+/// text deltas into a single result string.
+async fn simple_completion(
+    backend: &Arc<dyn LlmBackend>,
+    messages: Vec<ChatMessage>,
+) -> Result<String, String> {
+    let (tx, mut rx) = mpsc::channel::<StreamEvent>(256);
+    let params = ChatParams {
+        messages,
+        tools: vec![],
+        temperature: Some(0.3),
+        max_tokens: Some(60),
+    };
+
+    let b = backend.clone();
+    tokio::spawn(async move { b.chat(params, tx).await });
+
+    let mut text = String::new();
+    while let Some(event) = rx.recv().await {
+        match event {
+            StreamEvent::TextDelta { delta } => text.push_str(&delta),
+            StreamEvent::Done { .. } => break,
+            StreamEvent::Error { message } => {
+                return Err(format!("Summarization failed: {}", message));
+            }
+            _ => {} // ignore tool-call etc. (shouldn't happen without tools)
+        }
+    }
+    Ok(text.trim().to_string())
+}
+
+/// Build a summarization prompt from the conversation messages (JSON).
+/// Returns (system_prompt, user_prompt).
+fn build_summary_prompt(messages_json: &str) -> Result<(String, String), String> {
+    #[derive(serde::Deserialize)]
+    struct Msg {
+        role: String,
+        content: String,
+    }
+
+    let msgs: Vec<Msg> =
+        serde_json::from_str(messages_json).map_err(|e| format!("Invalid messages JSON: {}", e))?;
+
+    let user_msgs: Vec<&Msg> = msgs.iter().filter(|m| m.role == "user").collect();
+
+    if user_msgs.is_empty() {
+        return Err("No user messages found".into());
+    }
+
+    let system_prompt = "You are a title generator. Generate a concise, descriptive title (max 30 characters) for the conversation. Return ONLY the title — no quotes, no explanations, no prefixes.".to_string();
+
+    if user_msgs.len() == 1 {
+        let content = user_msgs[0].content.trim();
+        // Short prompts don't need LLM — handled on frontend, but if we get here:
+        let user_prompt = format!(
+            "Generate a short title (max 30 chars) for a conversation that starts with this query:\n\n{content}\n\nTitle:"
+        );
+        Ok((system_prompt, user_prompt))
+    } else {
+        // Multi-turn: include the full conversation excerpt
+        let mut conv_text = String::new();
+        for msg in &msgs {
+            let role_label = match msg.role.as_str() {
+                "user" => "User",
+                "assistant" => "Assistant",
+                _ => continue,
+            };
+            // Truncate long messages in the prompt to save tokens
+            let excerpt: String = if msg.content.len() > 300 {
+                format!("{}...", &msg.content[..300])
+            } else {
+                msg.content.clone()
+            };
+            conv_text.push_str(&format!("{role_label}: {excerpt}\n"));
+        }
+
+        let user_prompt = format!(
+            "Generate a short title (max 30 chars) that captures the main topic of this conversation:\n\n{conv_text}\nTitle:"
+        );
+        Ok((system_prompt, user_prompt))
+    }
+}
+
+/// Generate a conversation title by summarizing the message history.
+/// Called by the frontend after each complete agent response.
+#[tauri::command]
+pub async fn generate_title(
+    messages_json: String,
+    state: tauri::State<'_, Arc<AgentSession>>,
+) -> Result<String, String> {
+    let (system_prompt, user_prompt) = build_summary_prompt(&messages_json)?;
+
+    let messages = vec![
+        ChatMessage {
+            role: "system".into(),
+            content: serde_json::Value::String(system_prompt),
+        },
+        ChatMessage {
+            role: "user".into(),
+            content: serde_json::Value::String(user_prompt),
+        },
+    ];
+
+    let backend = {
+        let agent = state.agent.lock().await;
+        agent.backend().clone()
+    };
+
+    simple_completion(&backend, messages).await
 }

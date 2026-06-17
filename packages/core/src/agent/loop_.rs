@@ -37,6 +37,11 @@ impl AgentLoop {
         }
     }
 
+    /// Expose the backend for standalone operations (e.g. title summarization).
+    pub fn backend(&self) -> &Arc<dyn LlmBackend> {
+        &self.backend
+    }
+
     pub fn with_system_prompt(mut self, prompt: &str) -> Self {
         self.messages.push(ChatMessage {
             role: "system".into(),

@@ -23,6 +23,8 @@ export interface ToolResult {
 export const useAgentStore = defineStore("agent", () => {
   const isRunning = ref(false);
   const pendingApproval = ref<ApprovalRequest | null>(null);
+  /** File path most recently touched by a read_file or write_file tool call. */
+  const lastFilePath = ref<string | null>(null);
 
   /** Current active messages — delegates to project store's activeConversation */
   const messages = computed({
@@ -104,10 +106,17 @@ export const useAgentStore = defineStore("agent", () => {
     }
   }
 
+  /** Update the last-known file path (called from tool-call listener). */
+  function setLastFilePath(path: string | null) {
+    lastFilePath.value = path;
+  }
+
   return {
     messages,
     isRunning,
     pendingApproval,
+    lastFilePath,
+    setLastFilePath,
     configureAgent,
     sendMessage,
     stopGeneration,
