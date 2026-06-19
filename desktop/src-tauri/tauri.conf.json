@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicoverbruggen/tauri-v2-schema/main/schema.json",
-  "productName": "Xuflow",
+  "productName": "XuFlow",
   "version": "0.1.0",
   "identifier": "com.xuflow.desktop",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Xuflow",
+        "title": "XuFlow",
         "width": 1440,
         "height": 900,
         "minWidth": 600,
@@ -24,7 +24,9 @@
     ],
     "trayIcon": {
       "iconPath": "icons/icon.png",
-      "iconAsTemplate": true,
+      "iconAsTemplate": false,
+      "title": "XuFlow",
+      "tooltip": "XuFlow",
       "menuOnLeftClick": false
     },
     "security": {

@@ -38,9 +38,15 @@ const appearanceIcon = `<svg width="20" height="20" viewBox="0 0 20 20" fill="no
   <circle cx="10" cy="10" r="3" stroke="currentColor" stroke-width="1.6"/>
 </svg>`;
 
+const contextIcon = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+  <rect x="2" y="4" width="16" height="12" rx="2" stroke="currentColor" stroke-width="1.6"/>
+  <path d="M6 8h8M6 11h5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+</svg>`;
+
 const menuOptions: MenuOption[] = [
   { label: "外观", key: "appearance", icon: renderIcon(appearanceIcon) },
   { label: "API 密钥", key: "api-keys", icon: renderIcon(keyIcon) },
+  { label: "上下文管理", key: "context", icon: renderIcon(contextIcon) },
   { label: "接入点管理", key: "endpoints", icon: renderIcon(gridIcon) },
   { label: "关于", key: "about", icon: renderIcon(infoIcon) },
 ];

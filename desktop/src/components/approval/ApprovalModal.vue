@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import { NModal, NCard, NButton, NText } from "naive-ui";
 import { useAgentStore } from "../../stores/agent";
 import { useThemeStore } from "../../stores/theme";
@@ -13,6 +14,21 @@ async function approve() {
 async function reject() {
   await store.respondApproval(false);
 }
+
+// Parse edit tool params for diff display
+const isEdit = computed(() => store.pendingApproval?.tool === "edit");
+const editOld = computed(() => {
+  if (!isEdit.value) return "";
+  try { return JSON.parse(store.pendingApproval!.params).old_string || ""; } catch { return ""; }
+});
+const editNew = computed(() => {
+  if (!isEdit.value) return "";
+  try { return JSON.parse(store.pendingApproval!.params).new_string || ""; } catch { return ""; }
+});
+const editFile = computed(() => {
+  if (!store.pendingApproval) return "";
+  try { return JSON.parse(store.pendingApproval.params).path || ""; } catch { return ""; }
+});
 </script>
 
 <template>
@@ -55,7 +71,26 @@ async function reject() {
             {{ store.pendingApproval.tool }}
           </div>
         </div>
-        <div class="approval-field">
+        <!-- Edit diff preview -->
+        <div v-if="isEdit" class="approval-field">
+          <NText class="field-label">文件</NText>
+          <div class="field-value">{{ editFile }}</div>
+        </div>
+        <div v-if="isEdit" class="approval-field">
+          <NText class="field-label">变更预览</NText>
+          <div class="edit-diff">
+            <div class="edit-diff-removed">
+              <span class="edit-diff-marker">−</span>
+              <pre class="edit-diff-text">{{ editOld }}</pre>
+            </div>
+            <div class="edit-diff-added">
+              <span class="edit-diff-marker">+</span>
+              <pre class="edit-diff-text">{{ editNew }}</pre>
+            </div>
+          </div>
+        </div>
+        <!-- Raw params for non-edit tools -->
+        <div v-else class="approval-field">
           <NText class="field-label">执行参数</NText>
           <pre class="approval-params">{{ store.pendingApproval.params }}</pre>
         </div>
@@ -224,5 +259,63 @@ async function reject() {
 
 .approve-btn {
   border-radius: 10px;
+}
+
+/* ── Edit diff preview ──────────────────────── */
+.edit-diff {
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.dark .edit-diff {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.edit-diff-removed {
+  background: rgba(239, 68, 68, 0.08);
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+}
+
+.edit-diff-added {
+  background: rgba(34, 197, 94, 0.08);
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+}
+
+.edit-diff-marker {
+  font-family: monospace;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+  width: 14px;
+}
+
+.edit-diff-removed .edit-diff-marker {
+  color: #ef4444;
+}
+
+.edit-diff-added .edit-diff-marker {
+  color: #22c55e;
+}
+
+.edit-diff-text {
+  margin: 0;
+  font-size: 12px;
+  font-family: monospace;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  flex: 1;
+  color: #475569;
+}
+
+.dark .edit-diff-text {
+  color: #cbd5e1;
 }
 </style>

@@ -20,11 +20,58 @@ export interface ToolResult {
   content: string;
 }
 
+export interface TodoItem {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
+export interface PlanProposal {
+  title: string;
+  steps: string[];
+  files_to_modify: string[];
+}
+
 export const useAgentStore = defineStore("agent", () => {
   const isRunning = ref(false);
   const pendingApproval = ref<ApprovalRequest | null>(null);
   /** File path most recently touched by a read_file or write_file tool call. */
   const lastFilePath = ref<string | null>(null);
+  /** Current todo list from the agent's todo_write tool. */
+  const todos = ref<TodoItem[]>([]);
+  /** Pending plan proposal from the agent's propose_plan tool. */
+  const pendingPlan = ref<PlanProposal | null>(null);
+  /** Whether Plan Mode is enabled. */
+  const planMode = ref(false);
+
+  // ── Token / context tracking ────────────────────────────────────────
+  /** Current estimated token usage (heuristic, updated by token-usage events). */
+  const tokenUsage = ref<number>(0);
+  /** Last API-reported actual token usage (from agent:done). */
+  const tokenActual = ref<number | null>(null);
+  /** Current model's context window size (updated by backend events). */
+  const contextWindow = ref<number>(128000);
+  /** Estimated remaining context capacity. */
+  const contextRemaining = ref<number>(128000);
+
+  /** Whether the context was recently trimmed (transient, auto-clears). */
+  const contextTrimmed = ref<boolean>(false);
+  /** Metadata about the last trim operation. */
+  const trimMeta = ref<{ roundsRemoved: number; tokensFreed: number } | null>(null);
+
+  /** Percentage of context used (0–100). */
+  const tokenUsagePercent = computed(() => {
+    if (contextWindow.value <= 0) return 0;
+    return Math.min(100, Math.round((tokenUsage.value / contextWindow.value) * 100));
+  });
+
+  /** Warning level for context usage visualization. */
+  const tokenWarningLevel = computed<'green' | 'yellow' | 'orange' | 'red'>(() => {
+    const pct = tokenUsagePercent.value;
+    if (pct < 50) return 'green';
+    if (pct < 80) return 'yellow';
+    if (pct < 90) return 'orange';
+    return 'red';
+  });
 
   /** Current active messages — delegates to project store's activeConversation */
   const messages = computed({
@@ -116,10 +163,22 @@ export const useAgentStore = defineStore("agent", () => {
     isRunning,
     pendingApproval,
     lastFilePath,
+    todos,
+    pendingPlan,
+    planMode,
     setLastFilePath,
     configureAgent,
     sendMessage,
     stopGeneration,
     respondApproval,
+    // Token / context tracking
+    tokenUsage,
+    tokenActual,
+    contextWindow,
+    contextRemaining,
+    contextTrimmed,
+    trimMeta,
+    tokenUsagePercent,
+    tokenWarningLevel,
   };
 });

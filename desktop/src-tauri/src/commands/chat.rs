@@ -5,12 +5,12 @@ use tokio::sync::{mpsc, Mutex, oneshot};
 
 use xuflow_core::{
     agent::loop_::AgentLoop,
-    agent::system_prompt::SYSTEM_PROMPT,
+    agent::system_prompt::build_system_prompt,
     agent::types::ApprovalHandler,
     backends::{ChatMessage, ChatParams, LlmBackend, StreamEvent},
     backends::deepseek::DeepSeekBackend,
     backends::volcengine::VolcEngineBackend,
-    tools::{bash::BashTool, file::{ReadFileTool, WriteFileTool, ListDirTool}, grep::GrepTool, web::WebFetchTool, ToolRegistry},
+    tools::{bash::BashTool, edit::EditFileTool, file::{ReadFileTool, WriteFileTool, ListDirTool}, git::{GitStatusTool, GitDiffTool, GitLogTool, GitAddTool, GitCommitTool}, glob::GlobTool, grep::GrepTool, todo::{TodoWriteTool, ProposePlanTool}, web::WebFetchTool, ToolRegistry},
 };
 
 // ---------------------------------------------------------------------------
@@ -85,8 +85,12 @@ impl AgentSession {
     pub fn new(api_key: String, model: String, provider: String, app_handle: tauri::AppHandle) -> Self {
         let approval_tx: ApprovalChannel = Arc::new(Mutex::new(None));
 
+        let working_dir = std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| ".".to_string());
+
         let backend = Self::build_backend(&provider, &model, &api_key);
-        let agent = Self::build_agent(backend, app_handle.clone(), approval_tx.clone());
+        let agent = Self::build_agent(backend, app_handle.clone(), approval_tx.clone(), &working_dir);
 
         Self {
             agent: Mutex::new(agent),
@@ -97,8 +101,12 @@ impl AgentSession {
 
     /// Rebuild the backend and agent loop with new credentials / model.
     pub async fn reconfigure(&self, api_key: String, model: String, provider: String, app_handle: tauri::AppHandle) {
+        let working_dir = std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| ".".to_string());
+
         let backend = Self::build_backend(&provider, &model, &api_key);
-        let agent = Self::build_agent(backend, app_handle, self.approval_tx.clone());
+        let agent = Self::build_agent(backend, app_handle, self.approval_tx.clone(), &working_dir);
         *self.agent.lock().await = agent;
     }
 
@@ -113,20 +121,31 @@ impl AgentSession {
         backend: Arc<dyn LlmBackend>,
         app_handle: tauri::AppHandle,
         approval_tx: ApprovalChannel,
+        working_dir: &str,
     ) -> AgentLoop {
         let mut registry = ToolRegistry::new();
         registry.register(Box::new(ReadFileTool));
         registry.register(Box::new(WriteFileTool));
+        registry.register(Box::new(EditFileTool));
         registry.register(Box::new(ListDirTool));
         registry.register(Box::new(GrepTool));
         registry.register(Box::new(BashTool));
         registry.register(Box::new(WebFetchTool));
+        registry.register(Box::new(GlobTool));
+        registry.register(Box::new(GitStatusTool));
+        registry.register(Box::new(GitDiffTool));
+        registry.register(Box::new(GitLogTool));
+        registry.register(Box::new(GitAddTool));
+        registry.register(Box::new(GitCommitTool));
+        registry.register(Box::new(TodoWriteTool));
+        registry.register(Box::new(ProposePlanTool));
 
         let tools = Arc::new(registry);
         let approval: Arc<dyn ApprovalHandler> = Arc::new(TauriApprovalHandler::new(app_handle, approval_tx));
 
+        let system_prompt = build_system_prompt(working_dir);
         AgentLoop::new(backend, tools, approval)
-            .with_system_prompt(SYSTEM_PROMPT)
+            .with_system_prompt(&system_prompt)
     }
 }
 
@@ -172,6 +191,12 @@ pub async fn send_message(
                 StreamEvent::TextDelta { delta } => {
                     let _ = app_clone.emit("agent:text-delta", delta);
                 }
+                StreamEvent::ReasoningDelta { delta } => {
+                    let _ = app_clone.emit("agent:reasoning-delta", delta);
+                }
+                StreamEvent::ReasoningDone => {
+                    let _ = app_clone.emit("agent:reasoning-done", "");
+                }
                 StreamEvent::ToolCall { id, name, arguments } => {
                     let payload = serde_json::json!({
                         "id": id, "name": name, "arguments": arguments
@@ -190,11 +215,50 @@ pub async fn send_message(
                     });
                     let _ = app_clone.emit("agent:approval-required", payload.to_string());
                 }
-                StreamEvent::Done { .. } => {
-                    let _ = app_clone.emit("agent:done", ());
+                StreamEvent::TokenUsage { phase, estimated, actual, context_window, context_remaining } => {
+                    let payload = serde_json::json!({
+                        "phase": phase,
+                        "estimated": estimated,
+                        "actual": actual,
+                        "context_window": context_window,
+                        "context_remaining": context_remaining,
+                    });
+                    let _ = app_clone.emit("agent:token-usage", payload.to_string());
+                }
+                StreamEvent::ContextTrimmed { rounds_removed, tokens_freed, current_usage_percent, context_window } => {
+                    let payload = serde_json::json!({
+                        "rounds_removed": rounds_removed,
+                        "tokens_freed": tokens_freed,
+                        "current_usage_percent": current_usage_percent,
+                        "context_window": context_window,
+                    });
+                    let _ = app_clone.emit("agent:context-trimmed", payload.to_string());
+                }
+                StreamEvent::Done { usage } => {
+                    let payload = serde_json::json!({
+                        "v": 1,
+                        "usage": {
+                            "prompt_tokens": usage.prompt_tokens,
+                            "completion_tokens": usage.completion_tokens,
+                            "total_tokens": usage.total_tokens,
+                        }
+                    });
+                    let _ = app_clone.emit("agent:done", payload.to_string());
                 }
                 StreamEvent::Error { message } => {
                     let _ = app_clone.emit("agent:error", message);
+                }
+                StreamEvent::TodoUpdate { todos } => {
+                    let payload = serde_json::to_string(todos).unwrap_or_default();
+                    let _ = app_clone.emit("agent:todo-update", payload);
+                }
+                StreamEvent::PlanProposed { title, steps, files_to_modify } => {
+                    let payload = serde_json::json!({
+                        "title": title,
+                        "steps": steps,
+                        "files_to_modify": files_to_modify,
+                    });
+                    let _ = app_clone.emit("agent:plan-proposed", payload.to_string());
                 }
             }
         }
@@ -229,6 +293,32 @@ pub async fn stop_generation(
     state: tauri::State<'_, Arc<AgentSession>>,
 ) -> Result<(), String> {
     state.cancelled.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Context management commands
+// ---------------------------------------------------------------------------
+
+/// Set the context window size for the active agent.
+#[tauri::command]
+pub async fn set_context_window(
+    context_window: u32,
+    state: tauri::State<'_, Arc<AgentSession>>,
+) -> Result<(), String> {
+    let mut agent = state.agent.lock().await;
+    agent.set_context_window(context_window);
+    Ok(())
+}
+
+/// Set the minimum user turns to preserve during context trimming.
+#[tauri::command]
+pub async fn set_min_user_turns(
+    min_turns: u32,
+    state: tauri::State<'_, Arc<AgentSession>>,
+) -> Result<(), String> {
+    let mut agent = state.agent.lock().await;
+    agent.set_min_user_turns(min_turns);
     Ok(())
 }
 
@@ -331,11 +421,15 @@ pub async fn generate_title(
     let messages = vec![
         ChatMessage {
             role: "system".into(),
-            content: serde_json::Value::String(system_prompt),
+            content: Some(serde_json::Value::String(system_prompt)),
+            tool_calls: None,
+            tool_call_id: None,
         },
         ChatMessage {
             role: "user".into(),
-            content: serde_json::Value::String(user_prompt),
+            content: Some(serde_json::Value::String(user_prompt)),
+            tool_calls: None,
+            tool_call_id: None,
         },
     ];
 

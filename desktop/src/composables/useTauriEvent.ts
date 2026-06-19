@@ -1,6 +1,6 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useAgentStore, ToolCall, ToolResult } from "../stores/agent";
-import { useProjectStore } from "../stores/project";
+import { useAgentStore, ToolCall, ToolResult, type TodoItem, type PlanProposal } from "../stores/agent";
+import { useProjectStore, type ToolCallEntry } from "../stores/project";
 import { trySummarizeConversation } from "./useConversationSummary";
 
 export function useTauriEvent() {
@@ -31,6 +31,23 @@ export function useTauriEvent() {
     projectStore.persistMessages();
   }
 
+  /** Helper: get the last assistant message (must be streaming, i.e. done=false). */
+  function lastStreamingMsg() {
+    const conv = projectStore.activeConversation;
+    if (!conv) return null;
+    const msgs = conv.messages;
+    const last = msgs[msgs.length - 1];
+    if (last && last.role === "assistant" && !last.done) return last;
+    return null;
+  }
+
+  /** Helper: ensure toolCalls array exists on the given message. */
+  function ensureToolCalls(msg: ReturnType<typeof lastStreamingMsg>): ToolCallEntry[] {
+    if (!msg) return [];
+    if (!msg.toolCalls) msg.toolCalls = [];
+    return msg.toolCalls;
+  }
+
   async function setupListeners() {
     // Idempotent: if already set up, tear down old listeners first to avoid duplicates.
     if (listenersSetup) {
@@ -38,64 +55,86 @@ export function useTauriEvent() {
     }
     listenersSetup = true;
 
-    // Streaming text deltas from the Rust backend
+    // ── Streaming text deltas ──
     unlisteners.push(
       await listen<string>("agent:text-delta", (event) => {
-        const conv = projectStore.activeConversation;
-        if (!conv) return;
-        const msgs = conv.messages;
-        const lastMsg = msgs[msgs.length - 1];
-        if (lastMsg && lastMsg.role === "assistant" && !lastMsg.done) {
-          lastMsg.content += event.payload;
-          schedulePersist();
-        }
+        const msg = lastStreamingMsg();
+        if (!msg) return;
+        msg.content += event.payload;
+        schedulePersist();
       })
     );
 
-    // Tool call started
+    // ── Reasoning / thinking deltas ──
+    unlisteners.push(
+      await listen<string>("agent:reasoning-delta", (event) => {
+        const msg = lastStreamingMsg();
+        if (!msg) return;
+        if (msg.reasoning === undefined) msg.reasoning = "";
+        msg.reasoning += event.payload;
+        schedulePersist();
+      })
+    );
+
+    // ── Reasoning complete ──
+    unlisteners.push(
+      await listen<string>("agent:reasoning-done", (_event) => {
+        const msg = lastStreamingMsg();
+        if (!msg) return;
+        msg.reasoningDone = true;
+        schedulePersist();
+      })
+    );
+
+    // ── Tool call started ──
     unlisteners.push(
       await listen<string>("agent:tool-call", (event) => {
         const tc: ToolCall = JSON.parse(event.payload);
-        const conv = projectStore.activeConversation;
-        if (!conv) return;
-        const msgs = conv.messages;
-        const lastMsg = msgs[msgs.length - 1];
-        if (lastMsg && lastMsg.role === "assistant") {
-          lastMsg.content += `\n\n> 🔧 **${tc.name}** \`${tc.arguments.slice(0, 120)}\`\n`;
-          schedulePersist();
-        }
-        // Track file path for read_file / write_file tools
+        const msg = lastStreamingMsg();
+        if (!msg) return;
+        const toolCalls = ensureToolCalls(msg);
+
+        // Parse arguments for structured display
+        let argsParsed: Record<string, unknown> | undefined;
+        try {
+          argsParsed = JSON.parse(tc.arguments);
+        } catch { /* keep raw string */ }
+
+        toolCalls.push({
+          id: tc.id,
+          name: tc.name,
+          arguments: tc.arguments,
+          argsParsed,
+          resultDone: false,
+        });
+        schedulePersist();
+
+        // Track file path for file-related tools
         if (tc.name === "read_file" || tc.name === "write_file") {
-          try {
-            const args = JSON.parse(tc.arguments);
-            if (args.path) {
-              agentStore.setLastFilePath(args.path);
-            }
-          } catch { /* ignore parse errors */ }
+          if (argsParsed?.path) {
+            agentStore.setLastFilePath(String(argsParsed.path));
+          }
         }
       })
     );
 
-    // Tool result received
+    // ── Tool result received ──
     unlisteners.push(
       await listen<string>("agent:tool-result", (event) => {
         const tr: ToolResult = JSON.parse(event.payload);
-        const conv = projectStore.activeConversation;
-        if (!conv) return;
-        const msgs = conv.messages;
-        const lastMsg = msgs[msgs.length - 1];
-        if (lastMsg && lastMsg.role === "assistant") {
-          const preview =
-            tr.content.length > 300
-              ? tr.content.slice(0, 300) + "\n... (truncated)"
-              : tr.content;
-          lastMsg.content += `\n<details><summary>Tool result</summary>\n\n\`\`\`\n${preview}\n\`\`\`\n</details>\n`;
-          schedulePersist();
+        const msg = lastStreamingMsg();
+        if (!msg || !msg.toolCalls) return;
+
+        const entry = msg.toolCalls.find((t) => t.id === tr.id);
+        if (entry) {
+          entry.result = tr.content;
+          entry.resultDone = true;
         }
+        schedulePersist();
       })
     );
 
-    // Approval required
+    // ── Approval required ──
     unlisteners.push(
       await listen<string>("agent:approval-required", (event) => {
         const approval = JSON.parse(event.payload);
@@ -103,9 +142,77 @@ export function useTauriEvent() {
       })
     );
 
-    // Agent loop done
+    // ── Todo list update ──
     unlisteners.push(
-      await listen("agent:done", () => {
+      await listen<string>("agent:todo-update", (event) => {
+        try {
+          const todos: TodoItem[] = JSON.parse(event.payload);
+          agentStore.todos = todos;
+        } catch { /* ignore parse errors */ }
+      })
+    );
+
+    // ── Plan proposal ──
+    unlisteners.push(
+      await listen<string>("agent:plan-proposed", (event) => {
+        try {
+          const plan: PlanProposal = JSON.parse(event.payload);
+          agentStore.pendingPlan = plan;
+        } catch { /* ignore parse errors */ }
+      })
+    );
+
+    // ── Token usage update (before/after each API call) ──
+    unlisteners.push(
+      await listen<string>("agent:token-usage", (event) => {
+        try {
+          const d = JSON.parse(event.payload);
+          if (d.phase === "before") {
+            agentStore.tokenUsage = d.estimated;
+          } else if (d.phase === "after") {
+            if (d.actual != null) {
+              agentStore.tokenActual = d.actual;
+              // Calibrate: use the larger of estimated vs actual
+              agentStore.tokenUsage = Math.max(d.estimated, d.actual);
+            }
+          }
+          agentStore.contextWindow = d.context_window ?? agentStore.contextWindow;
+          agentStore.contextRemaining = d.context_remaining ?? (agentStore.contextWindow - agentStore.tokenUsage);
+        } catch { /* ignore parse errors */ }
+      })
+    );
+
+    // ── Context trimmed notification ──
+    unlisteners.push(
+      await listen<string>("agent:context-trimmed", (event) => {
+        try {
+          const d = JSON.parse(event.payload);
+          agentStore.contextTrimmed = true;
+          agentStore.trimMeta = {
+            roundsRemoved: d.rounds_removed ?? 0,
+            tokensFreed: d.tokens_freed ?? 0,
+          };
+          agentStore.contextWindow = d.context_window ?? agentStore.contextWindow;
+          // Auto-clear the transient badge after 3 seconds
+          setTimeout(() => {
+            agentStore.contextTrimmed = false;
+          }, 3000);
+        } catch { /* ignore parse errors */ }
+      })
+    );
+
+    // ── Agent loop done ──
+    unlisteners.push(
+      await listen<string>("agent:done", (event) => {
+        // Version-aware usage parsing (v=1: { v: 1, usage: { total_tokens, ... } })
+        try {
+          const p = JSON.parse(event.payload);
+          if (p.v === 1 && p.usage?.total_tokens != null) {
+            agentStore.tokenUsage = p.usage.total_tokens;
+            agentStore.tokenActual = p.usage.total_tokens;
+          }
+        } catch { /* old empty payload — safe to ignore */ }
+
         const conv = projectStore.activeConversation;
         const project = projectStore.activeProject;
         if (conv) {
@@ -114,7 +221,7 @@ export function useTauriEvent() {
           if (lastMsg && lastMsg.role === "assistant") {
             lastMsg.done = true;
           }
-          // Reveal hidden conversation in sidebar (created via "新会话" button)
+          // Reveal hidden conversation in sidebar
           if (conv.visible === false && project) {
             projectStore.revealConversation(project.id, conv.id);
           }
@@ -122,14 +229,14 @@ export function useTauriEvent() {
         agentStore.isRunning = false;
         flushPersist();
 
-        // Trigger conversation summary (non-blocking, fire-and-forget)
+        // Trigger conversation summary (non-blocking)
         trySummarizeConversation().catch((e) =>
           console.warn("[summary] trySummarizeConversation error:", e)
         );
       })
     );
 
-    // Agent error
+    // ── Agent error ──
     unlisteners.push(
       await listen<string>("agent:error", (event) => {
         const conv = projectStore.activeConversation;
@@ -147,7 +254,7 @@ export function useTauriEvent() {
     );
   }
 
-  /** Clean up all registered listeners. Call on component unmount. */
+  /** Clean up all registered listeners. */
   function teardownListeners() {
     for (const fn of unlisteners) {
       fn();

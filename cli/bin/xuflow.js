@@ -100,11 +100,14 @@ function ChatApp() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState(null);
   const [approvalPrompt, setApprovalPrompt] = useState(null);
+  const [reasoning, setReasoning] = useState("");
+  const [reasoningDone, setReasoningDone] = useState(false);
 
   const agentRef = useRef(null);
   const sessionRef = useRef(null);
   const sessionIdRef = useRef("");
   const streamRef = useRef("");
+  const reasoningRef = useRef("");
 
   // Initialize agent and session
   useEffect(() => {
@@ -138,6 +141,13 @@ function ChatApp() {
       case "TextDelta":
         streamRef.current += event.delta;
         setStreaming((prev) => prev + event.delta);
+        break;
+      case "ReasoningDelta":
+        reasoningRef.current += event.delta;
+        setReasoning((prev) => prev + event.delta);
+        break;
+      case "ReasoningDone":
+        setReasoningDone(true);
         break;
       case "ToolCall":
         setMessages((prev) => {
@@ -208,6 +218,9 @@ function ChatApp() {
     setError(null);
     setStreaming("");
     streamRef.current = "";
+    setReasoning("");
+    setReasoningDone(false);
+    reasoningRef.current = "";
     setRunning(true);
 
     setMessages((prev) => [
@@ -308,7 +321,21 @@ function ChatApp() {
             React.createElement(Text, null, streaming)
           )
         : null,
-      running && !streaming
+      // Reasoning indicator
+      reasoning
+        ? React.createElement(
+            Box,
+            { marginBottom: 1, marginLeft: 2 },
+            React.createElement(
+              Text,
+              { dimColor: true, color: reasoningDone ? "green" : "gray" },
+              reasoningDone
+                ? `✓ Done${reasoning.length > 0 ? " (reasoning hidden in CLI)" : ""}`
+                : `🧠 Thinking${reasoning.length > 0 ? `: ${reasoning.slice(0, 60)}...` : "..."}`
+            )
+          )
+        : null,
+      running && !streaming && !reasoning
         ? React.createElement(
             Box,
             { marginBottom: 1 },
@@ -330,7 +357,7 @@ function ChatApp() {
           React.createElement(
             Text,
             { bold: true, color: "yellow" },
-            "\u26A0 Tool Approval Required"
+            "⚠ Tool Approval Required"
           ),
           React.createElement(Text, null, `Tool: ${approvalPrompt.tool}`),
           React.createElement(
@@ -360,7 +387,7 @@ function ChatApp() {
       React.createElement(
         Text,
         { bold: true, color: "green" },
-        "\u276F "
+        "❯ "
       ),
       React.createElement(Text, null, input),
       running

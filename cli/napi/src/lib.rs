@@ -364,6 +364,6 @@ pub fn parse_model_config(json: String) -> napi::Result<String> {
 }
 
 #[napi]
-pub fn get_system_prompt() -> String {
-    xuflow_core::agent::system_prompt::SYSTEM_PROMPT.to_string()
+pub fn get_system_prompt(working_dir: String) -> String {
+    xuflow_core::agent::system_prompt::build_system_prompt(&working_dir)
 }

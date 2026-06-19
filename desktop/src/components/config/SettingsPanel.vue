@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { NCard, NForm, NFormItem, NInput, NButton, NText, NSlider } from "naive-ui";
-import { ref, watch, onBeforeUnmount } from "vue";
-import { useConfigStore, ALL_MODELS } from "../../stores/config";
+import { ref, watch, onBeforeUnmount, computed } from "vue";
+import { useConfigStore, ALL_MODELS, type TokenEstimateConfig } from "../../stores/config";
 import { useAgentStore } from "../../stores/agent";
 import { useThemeStore } from "../../stores/theme";
 
@@ -43,6 +43,57 @@ async function applyToBackend() {
   applied.value = true;
   setTimeout(() => { applied.value = false; }, 2000);
 }
+
+// ── Token estimate config helpers ──
+
+const DEFAULT_EST_CONFIG: TokenEstimateConfig = { cjkCoeff: 1.3, nonCjkCoeff: 0.25, structuredCoeff: 0.5 };
+
+function getEstConfig(modelValue: string): TokenEstimateConfig {
+  const custom = store.tokenEstimateConfigs[modelValue];
+  if (custom) return custom;
+  const found = ALL_MODELS.find((m) => m.value === modelValue);
+  return found?.tokenEstimateConfig ?? DEFAULT_EST_CONFIG;
+}
+
+function updateEstConfig(modelValue: string, patch: Partial<TokenEstimateConfig>) {
+  store.setTokenEstimateConfig(modelValue, { ...getEstConfig(modelValue), ...patch });
+}
+
+/** Models that support token config (all current models) */
+const allModelsForContext = computed(() => ALL_MODELS);
+
+// Template-safe handler wrappers (no TS annotations needed in @update:value)
+function handleContextWindowChange(modelValue: string, v: number | null) {
+  if (v != null) store.setContextWindow(modelValue, v);
+}
+function handleCjkCoeffChange(modelValue: string, v: number | null) {
+  if (v != null) updateEstConfig(modelValue, { cjkCoeff: v });
+}
+function handleNonCjkCoeffChange(modelValue: string, v: number | null) {
+  if (v != null) updateEstConfig(modelValue, { nonCjkCoeff: v });
+}
+function handleStructuredCoeffChange(modelValue: string, v: number | null) {
+  if (v != null) updateEstConfig(modelValue, { structuredCoeff: v });
+}
+// Curry-style wrappers to avoid implicit `any` in template arrows
+const ctxWinHandler = (m: string) => (v: number | null) => handleContextWindowChange(m, v);
+const cjkHandler    = (m: string) => (v: number | null) => handleCjkCoeffChange(m, v);
+const nonCjkHandler = (m: string) => (v: number | null) => handleNonCjkCoeffChange(m, v);
+const structHandler = (m: string) => (v: number | null) => handleStructuredCoeffChange(m, v);
+
+// Push context window changes to Rust backend via Tauri
+watch(
+  () => [store.activeContextWindow, store.activeMinUserTurns] as const,
+  async ([ctxWin, minTurns]) => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("set_context_window", { contextWindow: ctxWin });
+      await invoke("set_min_user_turns", { minTurns });
+    } catch (e) {
+      // Silent — Tauri backend may not be available during SSR/setup
+    }
+  }
+);
 </script>
 
 <template>
@@ -257,6 +308,137 @@ async function applyToBackend() {
             />
           </NFormItem>
         </NForm>
+      </NCard>
+    </div>
+
+    <!-- 上下文管理 -->
+    <div v-if="props.activeSection === 'context'" class="section">
+      <h2 class="section-title">上下文管理</h2>
+      <p class="section-desc">配置各模型的上下文窗口大小与 token 估算参数。默认值来自模型官方规格。</p>
+
+      <!-- 上下文窗口大小 -->
+      <NCard class="settings-card" style="margin-bottom: 20px">
+        <template #header>
+          <div class="card-header">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <rect x="2" y="4" width="16" height="12" rx="2" stroke="currentColor" stroke-width="1.6"/>
+              <path d="M6 8h8M6 11h5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            </svg>
+            <span>上下文窗口大小</span>
+          </div>
+        </template>
+        <div class="endpoint-grid">
+          <NForm label-placement="top" size="small">
+            <NFormItem
+              v-for="m in allModelsForContext"
+              :key="'ctx-' + m.value"
+              :label="m.label"
+            >
+              <NInputNumber
+                :value="store.getContextWindow(m.value)"
+                @update:value="ctxWinHandler(m.value)"
+                :min="1000"
+                :max="1000000"
+                :step="1000"
+                :placeholder="String(m.contextWindow ?? 128000)"
+                style="width: 100%"
+              />
+              <template #feedback>
+                <span class="feedback-text">默认: {{ (m.contextWindow ?? 128000).toLocaleString() }} tokens</span>
+              </template>
+            </NFormItem>
+          </NForm>
+        </div>
+      </NCard>
+
+      <!-- 最小保留轮数 -->
+      <NCard class="settings-card" style="margin-bottom: 20px">
+        <template #header>
+          <div class="card-header">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M3 6h14M3 10h10M3 14h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            </svg>
+            <span>最小保留轮数</span>
+          </div>
+        </template>
+        <div class="slider-section">
+          <div class="slider-label-row">
+            <span class="slider-desc">
+              上下文截断时保证保留的最后 N 轮对话（一轮 = 用户消息 + 完整的助手响应与工具调用）。
+              增大此值可在长对话中保留更多上下文，但可能影响截断效果。
+            </span>
+            <span class="slider-value">{{ store.minUserTurns }} 轮</span>
+          </div>
+          <NSlider
+            :value="store.minUserTurns"
+            @update:value="store.setMinUserTurns($event)"
+            :min="1"
+            :max="10"
+            :step="1"
+            :marks="{ 1: '1', 3: '3', 5: '5', 7: '7', 10: '10' }"
+          />
+        </div>
+      </NCard>
+
+      <!-- 高级：Token 估算系数 -->
+      <NCard class="settings-card">
+        <template #header>
+          <div class="card-header">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.6"/>
+              <path d="M10 6v4l3 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            </svg>
+            <span>Token 估算系数（高级）</span>
+          </div>
+        </template>
+        <p class="section-desc" style="margin-top: 0; margin-bottom: 12px;">
+          调整字符到 token 的换算系数以提升估算精度。不同模型对中文/英文/代码的 token 化策略不同。
+        </p>
+        <div class="endpoint-grid">
+          <NForm label-placement="top" size="small">
+            <NFormItem
+              v-for="m in allModelsForContext"
+              :key="'coeff-' + m.value"
+              :label="m.label"
+            >
+              <div style="display: flex; gap: 8px;">
+                <NInputNumber
+                  :value="getEstConfig(m.value).cjkCoeff"
+                  @update:value="cjkHandler(m.value)"
+                  :min="0.5"
+                  :max="3.0"
+                  :step="0.1"
+                  placeholder="CJK"
+                  style="flex: 1"
+                >
+                  <template #prefix>CJK</template>
+                </NInputNumber>
+                <NInputNumber
+                  :value="getEstConfig(m.value).nonCjkCoeff"
+                  @update:value="nonCjkHandler(m.value)"
+                  :min="0.1"
+                  :max="1.0"
+                  :step="0.05"
+                  placeholder="非CJK"
+                  style="flex: 1"
+                >
+                  <template #prefix>非CJK</template>
+                </NInputNumber>
+                <NInputNumber
+                  :value="getEstConfig(m.value).structuredCoeff"
+                  @update:value="structHandler(m.value)"
+                  :min="0.2"
+                  :max="1.5"
+                  :step="0.1"
+                  placeholder="结构化"
+                  style="flex: 1"
+                >
+                  <template #prefix>结构</template>
+                </NInputNumber>
+              </div>
+            </NFormItem>
+          </NForm>
+        </div>
       </NCard>
     </div>
 

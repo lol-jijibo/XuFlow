@@ -5,12 +5,22 @@ import type { SelectOption, SelectGroupOption } from "naive-ui";
 
 export type Provider = "deepseek" | "volcengine";
 
+export interface TokenEstimateConfig {
+  cjkCoeff: number;        // CJK 字符系数，默认 1.3
+  nonCjkCoeff: number;     // 非 CJK 字符系数，默认 0.25
+  structuredCoeff: number; // 结构化内容系数，默认 0.5
+}
+
 export interface ModelOption {
   label: string;
   value: string;
   provider: Provider;
   /** 默认的 API model ID / endpoint ID */
   apiModelId: string;
+  /** Context window size in tokens (default: 128000 for all current models) */
+  contextWindow?: number;
+  /** Optional token estimation coefficient overrides for this model */
+  tokenEstimateConfig?: TokenEstimateConfig;
 }
 
 export const ALL_MODELS: ModelOption[] = [
@@ -53,6 +63,9 @@ function loadConfig(): {
   deepseekApiKey: string;
   volcengineApiKey: string;
   modelEndpoints: Record<string, string>;
+  contextWindows: Record<string, number>;
+  minUserTurns: number;
+  tokenEstimateConfigs: Record<string, TokenEstimateConfig>;
 } {
   try {
     const raw = localStorage.getItem(CONFIG_STORAGE_KEY);
@@ -63,6 +76,9 @@ function loadConfig(): {
         deepseekApiKey: data.deepseekApiKey ?? "",
         volcengineApiKey: data.volcengineApiKey ?? "",
         modelEndpoints: data.modelEndpoints ?? {},
+        contextWindows: data.contextWindows ?? {},
+        minUserTurns: data.minUserTurns ?? 3,
+        tokenEstimateConfigs: data.tokenEstimateConfigs ?? {},
       };
     }
   } catch (e) {
@@ -73,6 +89,9 @@ function loadConfig(): {
     deepseekApiKey: "",
     volcengineApiKey: "",
     modelEndpoints: {},
+    contextWindows: {},
+    minUserTurns: 3,
+    tokenEstimateConfigs: {},
   };
 }
 
@@ -81,6 +100,9 @@ function saveConfig(state: {
   deepseekApiKey: string;
   volcengineApiKey: string;
   modelEndpoints: Record<string, string>;
+  contextWindows: Record<string, number>;
+  minUserTurns: number;
+  tokenEstimateConfigs: Record<string, TokenEstimateConfig>;
 }) {
   try {
     localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(state));
@@ -98,12 +120,22 @@ export const useConfigStore = defineStore("config", () => {
   /** 每个模型的接入点 ID 映射 (value → endpoint ID)，覆盖 ALL_MODELS 里的默认值 */
   const modelEndpoints = ref<Record<string, string>>(saved.modelEndpoints);
 
+  /** Per-model context window overrides (modelValue → tokens) */
+  const contextWindows = ref<Record<string, number>>(saved.contextWindows);
+  /** Minimum user turns to preserve during context trimming */
+  const minUserTurns = ref<number>(saved.minUserTurns);
+  /** Per-model token estimation coefficient overrides (modelValue → config) */
+  const tokenEstimateConfigs = ref<Record<string, TokenEstimateConfig>>(saved.tokenEstimateConfigs);
+
   function persist() {
     saveConfig({
       activeModelId: activeModelId.value,
       deepseekApiKey: deepseekApiKey.value,
       volcengineApiKey: volcengineApiKey.value,
       modelEndpoints: modelEndpoints.value,
+      contextWindows: contextWindows.value,
+      minUserTurns: minUserTurns.value,
+      tokenEstimateConfigs: tokenEstimateConfigs.value,
     });
   }
 
@@ -151,6 +183,51 @@ export const useConfigStore = defineStore("config", () => {
     const found = ALL_MODELS.find((m) => m.value === activeModelId.value);
     return found?.apiModelId ?? activeModelId.value;
   });
+
+  /** Current active model's context window size. Custom override first, then model default, then 128K. */
+  const activeContextWindow = computed<number>(() => {
+    const custom = contextWindows.value[activeModelId.value];
+    if (custom != null && custom > 0) return custom;
+    const found = ALL_MODELS.find((m) => m.value === activeModelId.value);
+    return found?.contextWindow ?? 128000;
+  });
+
+  /** Current active model's minimum user turns for trimming. */
+  const activeMinUserTurns = computed<number>(() => minUserTurns.value);
+
+  /** Current active model's token estimation config. */
+  const activeTokenEstimateConfig = computed<TokenEstimateConfig>(() => {
+    const custom = tokenEstimateConfigs.value[activeModelId.value];
+    if (custom) return custom;
+    const found = ALL_MODELS.find((m) => m.value === activeModelId.value);
+    return found?.tokenEstimateConfig ?? { cjkCoeff: 1.3, nonCjkCoeff: 0.25, structuredCoeff: 0.5 };
+  });
+
+  /** Set a custom context window for a model. */
+  function setContextWindow(modelId: string, window: number) {
+    contextWindows.value = { ...contextWindows.value, [modelId]: window };
+    persist();
+  }
+
+  /** Get the effective context window for a model. */
+  function getContextWindow(modelId: string): number {
+    const custom = contextWindows.value[modelId];
+    if (custom != null && custom > 0) return custom;
+    const found = ALL_MODELS.find((m) => m.value === modelId);
+    return found?.contextWindow ?? 128000;
+  }
+
+  /** Set the minimum user turns for all models. */
+  function setMinUserTurns(n: number) {
+    minUserTurns.value = Math.max(1, Math.min(10, n));
+    persist();
+  }
+
+  /** Set custom token estimation config for a model. */
+  function setTokenEstimateConfig(modelId: string, config: TokenEstimateConfig) {
+    tokenEstimateConfigs.value = { ...tokenEstimateConfigs.value, [modelId]: config };
+    persist();
+  }
 
   /** 所有火山引擎模型的 endpoint 列表（用于设置页面） */
   const volcModels = computed(() =>
@@ -218,7 +295,7 @@ export const useConfigStore = defineStore("config", () => {
   }
 
   // Auto-persist whenever any key config value changes (handles v-model, direct ref mutation, etc.)
-  watch([activeModelId, deepseekApiKey, volcengineApiKey, modelEndpoints], () => {
+  watch([activeModelId, deepseekApiKey, volcengineApiKey, modelEndpoints, contextWindows, minUserTurns, tokenEstimateConfigs], () => {
     persist();
   }, { deep: true });
 
@@ -241,5 +318,16 @@ export const useConfigStore = defineStore("config", () => {
     getProviderForModel,
     getModelDisplayName,
     initFromEnv,
+    // Context management
+    contextWindows,
+    minUserTurns,
+    tokenEstimateConfigs,
+    activeContextWindow,
+    activeMinUserTurns,
+    activeTokenEstimateConfig,
+    setContextWindow,
+    getContextWindow,
+    setMinUserTurns,
+    setTokenEstimateConfig,
   };
 });

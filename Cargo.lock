@@ -6398,6 +6398,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "futures-util",
+ "glob",
  "lazy_static",
  "regex",
  "reqwest 0.12.28",

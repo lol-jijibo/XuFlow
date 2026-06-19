@@ -614,13 +614,13 @@ function handleNewConversation() {
   background: rgba(255, 255, 255, 0.04);
 }
 
-/* Strong active block for selected conversation */
+/* Active block for selected conversation — subtle */
 .conversation-item.active {
-  background: rgba(0, 0, 0, 0.07);
+  background: rgba(0, 0, 0, 0.05);
 }
 
 .sidebar.dark .conversation-item.active {
-  background: #3E4148;
+  background: rgba(255, 255, 255, 0.06);
 }
 
 /* Chat bubble icon */

@@ -1,10 +1,29 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 
+export interface ToolCallEntry {
+  id: string;
+  name: string;
+  arguments: string;
+  /** Parsed arguments object (cached after first parse). */
+  argsParsed?: Record<string, unknown>;
+  result?: string;
+  /** Whether the tool result has been received. */
+  resultDone: boolean;
+}
+
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
   done: boolean;
+  /** Reasoning / thinking content streamed by the model (e.g. DeepSeek-R1 reasoning). */
+  reasoning?: string;
+  /** Whether the reasoning block is complete. */
+  reasoningDone?: boolean;
+  /** UI state: whether the user has expanded the reasoning block. */
+  reasoningExpanded?: boolean;
+  /** Tool calls made during this assistant turn. Not serialized — rebuilt from events. */
+  toolCalls?: ToolCallEntry[];
 }
 
 export interface Conversation {
