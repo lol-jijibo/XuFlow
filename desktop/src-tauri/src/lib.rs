@@ -4,12 +4,12 @@ use std::sync::Arc;
 use tauri::Manager;
 use commands::chat::AgentSession;
 use commands::persistence::DbState;
+use xuflow_core::SessionStore;
 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_sql::Builder::new().build())
         .setup(|app| {
             let handle = app.handle().clone();
             // Agent 会话 — 占位凭证，前端必须调用 configure_agent 后发消息。
@@ -21,8 +21,13 @@ pub fn run() {
             );
             app.manage(Arc::new(session));
 
-            // MySQL 数据库状态 — 初始未连接，前端通过设置页配置连接信息。
-            let db_state = Arc::new(DbState::new());
+            // SQLite 数据库 — 测试阶段存储在 D 盘项目目录。
+            let db_path = std::path::PathBuf::from(r"D:\Projects-star\XuFlow-sqlite_content\xuflow.db");
+            let store = SessionStore::open(Some(db_path))
+                .expect("无法初始化 SQLite 数据库");
+            let db_state = Arc::new(DbState {
+                store: Arc::new(store),
+            });
             app.manage(db_state);
 
             Ok(())

@@ -25,7 +25,7 @@ export interface ChatMessage {
   reasoningExpanded?: boolean;
   /** Tool calls made during this assistant turn. Not serialized — rebuilt from events. */
   toolCalls?: ToolCallEntry[];
-  /** MySQL 行 ID（仅连接 MySQL 时赋值，localStorage 模式下无此字段）。 */
+  /** SQLite 行 ID（自增主键，用于流式更新定位）。 */
   _dbId?: number;
 }
 
@@ -58,7 +58,7 @@ function uid(): string {
 
 const STORAGE_KEY = "xuflow-projects";
 
-// ── localStorage 工具函数（MySQL 未连接时的回退方案）────────
+// ── localStorage 工具函数（SQLite 异常时的回退方案）────────
 
 function loadFromLocalStorage(): { projects: Project[]; activeProjectId: string | null; activeConversationId: string | null } {
   try {
@@ -92,9 +92,9 @@ function saveToLocalStorage(
   }
 }
 
-// ── MySQL 数据加载 ───────────────────────────────────────────
+// ── SQLite 数据加载 ───────────────────────────────────────────
 
-/** 从 MySQL 加载所有项目及其会话和消息，重组为前端 Project[] 结构。 */
+/** 从 SQLite 加载所有项目及其会话和消息，重组为前端 Project[] 结构。 */
 async function loadFromMySql(): Promise<{ projects: Project[]; activeProjectId: string | null; activeConversationId: string | null }> {
   try {
     // 检查是否已迁移（暂未使用，后续可做迁移提示）
@@ -167,31 +167,21 @@ export const useProjectStore = defineStore("project", () => {
   const activeProjectId = ref<string | null>(saved.activeProjectId);
   const activeConversationId = ref<string | null>(saved.activeConversationId);
 
-  /** MySQL 是否已连接并完成数据加载。 */
-  const dbConnected = ref(false);
+  /** SQLite 是否已就绪（启动即连接，始终为 true）。 */
+  const dbConnected = ref(true);
 
-  /** 是否已从 MySQL 加载过数据（防重复加载）。 */
-  let dbLoaded = false;
-
-  /** 尝试从 MySQL 加载数据。成功则替换 projects 并返回 true。 */
+  /** 尝试从 SQLite 加载数据。成功则替换 projects 并返回 true。 */
   async function tryLoadFromMySql(): Promise<boolean> {
-    if (dbLoaded) return dbConnected.value;
-    dbLoaded = true;
-
-    // 检查 MySQL 连接状态
-    const connected = await invoke<boolean>("db_is_connected").catch(() => false);
-    if (!connected) return false;
-
+    // SQLite 始终可用，直接加载
     try {
       const data = await loadFromMySql();
       projects.value = data.projects;
       activeProjectId.value = data.activeProjectId;
       activeConversationId.value = data.activeConversationId;
-      dbConnected.value = true;
-      console.log("[project] Loaded from MySQL:", projects.value.length, "projects");
+      console.log("[project] Loaded from SQLite:", projects.value.length, "projects");
       return true;
-    } catch {
-      dbConnected.value = false;
+    } catch (e) {
+      console.error("[project] Failed to load from SQLite, falling back to localStorage:", e);
       return false;
     }
   }
@@ -213,9 +203,9 @@ export const useProjectStore = defineStore("project", () => {
 
   validateState();
 
-  /** 持久化：MySQL 已由各方法实时写入，此处仅回退到 localStorage。 */
+  /** 持久化：SQLite 已由各方法实时写入，此处仅回退到 localStorage。 */
   function persist() {
-    if (dbConnected.value) return; // MySQL 模式下不需要 localStorage
+    if (dbConnected.value) return; // SQLite 模式下不需要 localStorage
     saveToLocalStorage(projects.value, activeProjectId.value, activeConversationId.value);
   }
 
@@ -437,9 +427,9 @@ export const useProjectStore = defineStore("project", () => {
     return true;
   }
 
-  // ── MySQL 消息操作（流式持久化用）─────────────────────────
+  // ── 消息持久化操作（流式持久化用）─────────────────────────
 
-  /** 向 MySQL 插入新消息行，返回自增 id。仅 MySQL 模式调用。 */
+  /** 向 SQLite 插入新消息行，返回自增 id。 */
   async function dbAddMessage(sessionId: string, role: string, content: string, reasoning?: string, toolCallsJson?: string): Promise<number> {
     if (!dbConnected.value) return 0;
     try {

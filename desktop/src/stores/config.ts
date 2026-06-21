@@ -62,35 +62,6 @@ function getModelDisplayName(modelId: string): string {
 }
 
 const CONFIG_STORAGE_KEY = "xuflow-config";
-const DB_CONFIG_KEY = "xuflow-db-config";
-
-/** MySQL 连接信息（仅存 localStorage，因为连上数据库前就要读取）。 */
-export interface DbConnectConfig {
-  host: string;
-  port: number;
-  user: string;
-  password: string;
-  database: string;
-}
-
-export function loadDbConfig(): DbConnectConfig | null {
-  try {
-    const raw = localStorage.getItem(DB_CONFIG_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch (e) {
-    console.error("[config] Failed to load db config:", e);
-  }
-  return null;
-}
-
-export function saveDbConfig(config: DbConnectConfig) {
-  try {
-    localStorage.setItem(DB_CONFIG_KEY, JSON.stringify(config));
-  } catch (e) {
-    console.error("[config] Failed to save db config:", e);
-  }
-}
-
 function loadConfig(): {
   activeModelId: string;
   deepseekApiKey: string;
@@ -164,7 +135,8 @@ export const useConfigStore = defineStore("config", () => {
   const minUserTurns = ref<number>(saved.minUserTurns);
   /** Per-model token estimation coefficient overrides (modelValue → config) */
   const tokenEstimateConfigs = ref<Record<string, TokenEstimateConfig>>(saved.tokenEstimateConfigs);
-  const dbConnected = ref(false);
+  /** SQLite 是否已就绪（启动即连接，始终为 true）。 */
+  const dbConnected = ref(true);
   function setDbConnected(v: boolean) { dbConnected.value = v; }
 
 
@@ -180,17 +152,14 @@ export const useConfigStore = defineStore("config", () => {
       tokenEstimateConfigs: tokenEstimateConfigs.value,
     };
     saveConfig(state);
-    if (dbConnected.value) {
-      invoke("db_set_config", { key: CONFIG_STORAGE_KEY, value: JSON.stringify(state) })
-        .catch((e) => console.error("[config] db_set_config failed:", e));
-    }
+    // 始终写入 SQLite（双写：localStorage 为主，SQLite 为持久副本）
+    invoke("db_set_config", { key: CONFIG_STORAGE_KEY, value: JSON.stringify(state) })
+      .catch((e) => console.error("[config] db_set_config failed:", e));
   }
 
-  /** 从 MySQL 加载配置并合并到当前状态（MySQL 优先，localStorage 回退）。 */
+  /** 从 SQLite 加载配置并合并到当前状态（SQLite 优先，localStorage 回退）。 */
   async function loadFromMySql(): Promise<boolean> {
     try {
-      const connected = await invoke<boolean>("db_is_connected").catch(() => false);
-      if (!connected) return false;
       const json = await invoke<string | null>("db_get_config", { key: CONFIG_STORAGE_KEY }).catch(() => null);
       if (!json) return false;
       const data = JSON.parse(json);
@@ -202,11 +171,10 @@ export const useConfigStore = defineStore("config", () => {
       if (data.contextWindows) contextWindows.value = { ...contextWindows.value, ...data.contextWindows };
       if (data.minUserTurns != null) minUserTurns.value = data.minUserTurns;
       if (data.tokenEstimateConfigs) tokenEstimateConfigs.value = { ...tokenEstimateConfigs.value, ...data.tokenEstimateConfigs };
-      dbConnected.value = true;
-      console.log("[config] Loaded from MySQL");
+      console.log("[config] Loaded from SQLite");
       return true;
     } catch (e) {
-      console.error("[config] Failed to load from MySQL:", e);
+      console.error("[config] Failed to load from SQLite:", e);
       return false;
     }
   }

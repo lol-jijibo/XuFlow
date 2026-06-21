@@ -2,7 +2,6 @@
 import { NCard, NForm, NFormItem, NInput, NInputNumber, NButton, NText, NSlider } from "naive-ui";
 import { ref, watch, onBeforeUnmount, computed } from "vue";
 import { useProjectStore } from "../../stores/project";
-import { loadDbConfig, saveDbConfig } from "../../stores/config";
 import { invoke } from "@tauri-apps/api/core";
 import { useConfigStore, ALL_MODELS, type TokenEstimateConfig } from "../../stores/config";
 import { useAgentStore } from "../../stores/agent";
@@ -84,106 +83,35 @@ const cjkHandler    = (m: string) => (v: number | null) => handleCjkCoeffChange(
 const nonCjkHandler = (m: string) => (v: number | null) => handleNonCjkCoeffChange(m, v);
 const structHandler = (m: string) => (v: number | null) => handleStructuredCoeffChange(m, v);
 
-  // ── 数据库连接配置 ──────────────────────────────────────
+  // ── 数据库状态（SQLite 本地存储，零配置）─────────────────
 
   const projectStore = useProjectStore();
+  const dbConnected = ref(true);
+  const dbMigrating = ref(false);
+  const dbMigratedCount = ref(0);
 
-  const savedDbConfig = loadDbConfig();
-  const dbHost = ref(savedDbConfig?.host ?? "127.0.0.1");
-  const dbPort = ref(savedDbConfig?.port ?? 3306);
-  const dbUser = ref(savedDbConfig?.user ?? "root");
-  const dbPassword = ref(savedDbConfig?.password ?? "");
-  const dbName = ref(savedDbConfig?.database ?? "xuflow");
-
-  const dbConnecting = ref(false);
-  const dbTestOk = ref(false);
-  const dbTestFail = ref(false);
-  const dbConnected = ref(false);
-
-  async function checkDbStatus() {
+  /** 从 localStorage 迁移旧数据到 SQLite（仅首次执行）。 */
+  async function migrateFromLocalStorage() {
+    dbMigrating.value = true;
     try {
-      const ok = await invoke<boolean>("db_is_connected");
-      dbConnected.value = ok;
-      if (ok) {
-        projectStore.dbConnected = true;
-        store.loadFromMySql();
+      const isMigrated = await invoke<boolean>("db_is_migrated");
+      if (!isMigrated) {
+        const raw = localStorage.getItem("xuflow-projects");
+        if (raw) {
+          const count = await invoke<number>("db_migrate_from_localstorage", { frontendProjectsJson: raw });
+          dbMigratedCount.value = count;
+          console.log("[settings] Migrated", count, "messages from localStorage to SQLite");
+        }
       }
-    } catch {
-      dbConnected.value = false;
-    }
-  }
-
-  async function testConnection() {
-    dbConnecting.value = true;
-    dbTestOk.value = false;
-    dbTestFail.value = false;
-    try {
-      await invoke("db_test_connection", {
-        opts: {
-          host: dbHost.value,
-          port: dbPort.value,
-          user: dbUser.value,
-          password: dbPassword.value,
-          database: dbName.value,
-        }
-      });
-      dbTestOk.value = true;
-    } catch (e: any) {
-      dbTestFail.value = true;
-      console.error("[settings] DB test failed:", e);
+    } catch (e) {
+      console.error("[settings] Migration check failed:", e);
     } finally {
-      dbConnecting.value = false;
+      dbMigrating.value = false;
     }
   }
 
-  async function saveAndConnect() {
-    dbConnecting.value = true;
-    dbTestOk.value = false;
-    dbTestFail.value = false;
-    saveDbConfig({
-      host: dbHost.value,
-      port: dbPort.value,
-      user: dbUser.value,
-      password: dbPassword.value,
-      database: dbName.value,
-    });
-    try {
-      await invoke("db_connect", {
-        opts: {
-          host: dbHost.value,
-          port: dbPort.value,
-          user: dbUser.value,
-          password: dbPassword.value,
-          database: dbName.value,
-        }
-      });
-      dbConnected.value = true;
-      dbTestOk.value = true;
-      projectStore.dbConnected = true;
-      await projectStore.tryLoadFromMySql();
-      await store.loadFromMySql();
-      try {
-        const isMigrated = await invoke<boolean>("db_is_migrated");
-        if (!isMigrated) {
-          const raw = localStorage.getItem("xuflow-projects");
-          if (raw) {
-            const count = await invoke<number>("db_migrate_from_localstorage", { frontendProjectsJson: raw });
-            console.log("[settings] Migrated", count, "messages from localStorage to MySQL");
-          }
-        }
-      } catch (e) {
-        console.error("[settings] Migration check failed:", e);
-      }
-    } catch (e: any) {
-      dbTestFail.value = true;
-      dbConnected.value = false;
-      console.error("[settings] DB connect failed:", e);
-    } finally {
-      dbConnecting.value = false;
-    }
-  }
-
-  checkDbStatus();
+  // 启动时自动检查并迁移 localStorage 数据
+  migrateFromLocalStorage();
 
 // Push context window changes to Rust backend via Tauri
 watch(
@@ -553,9 +481,9 @@ watch(
     <!-- 数据库 -->
     <div v-if="props.activeSection === 'database'" class="section">
       <h2 class="section-title">数据库</h2>
-      <p class="section-desc">配置 MySQL 连接，替代默认的浏览器本地存储。数据和对话将持久化到指定数据库。</p>
+      <p class="section-desc">使用本地 SQLite 文件存储，零配置，启动即用。数据和对话自动持久化。</p>
 
-      <!-- 连接配置 -->
+      <!-- 存储状态 -->
       <NCard class="settings-card" style="margin-bottom: 20px">
         <template #header>
           <div class="card-header">
@@ -564,41 +492,16 @@ watch(
               <path d="M2 5v10c0 1.66 3.58 3 8 3s8-1.34 8-3V5" stroke="currentColor" stroke-width="1.6" />
               <path d="M2 10c0 1.66 3.58 3 8 3s8-1.34 8-3" stroke="currentColor" stroke-width="1.2" />
             </svg>
-            <span>MySQL 连接配置</span>
-            <span class="db-status" :style="{ color: dbConnected ? '#22c55e' : '#9ca3af' }">
-              {{ dbConnected ? '● 已连接' : '○ 未连接' }}
-            </span>
+            <span>SQLite 本地存储</span>
+            <span class="db-status" style="color: #22c55e">● 已就绪</span>
           </div>
         </template>
-        <NForm label-placement="left" label-width="80" size="small">
-          <NFormItem label="主机地址">
-            <NInput v-model:value="dbHost" placeholder="127.0.0.1" />
-          </NFormItem>
-          <NFormItem label="端口">
-            <NInputNumber v-model:value="dbPort" :min="1" :max="65535" style="width: 100%" />
-          </NFormItem>
-          <NFormItem label="用户名">
-            <NInput v-model:value="dbUser" placeholder="root" />
-          </NFormItem>
-          <NFormItem label="密码">
-            <NInput v-model:value="dbPassword" type="password" placeholder="MySQL 密码" show-password-on="click" />
-          </NFormItem>
-          <NFormItem label="数据库名">
-            <NInput v-model:value="dbName" placeholder="xuflow" />
-          </NFormItem>
-          <NFormItem>
-            <div style="display: flex; gap: 8px;">
-              <NButton @click="testConnection" :loading="dbConnecting" secondary>
-                测试连接
-              </NButton>
-              <NButton @click="saveAndConnect" :loading="dbConnecting" type="primary">
-                保存并连接
-              </NButton>
-              <NText v-if="dbTestOk" type="success" style="align-self: center; font-size: 13px;">✓ 连接成功</NText>
-              <NText v-if="dbTestFail" type="error" style="align-self: center; font-size: 13px;">✗ 连接失败</NText>
-            </div>
-          </NFormItem>
-        </NForm>
+        <div class="about-content">
+          <p>数据文件位置：<code>%APPDATA%/xuflow/xuflow.db</code>（Windows）</p>
+          <p>所有项目、会话和消息自动持久化到本地 SQLite 数据库，无需手动配置。</p>
+          <p v-if="dbMigrating" style="color: #6b7280;">正在检查本地数据迁移…</p>
+          <p v-else-if="dbMigratedCount > 0" style="color: #22c55e;">已从 localStorage 迁移 {{ dbMigratedCount }} 条消息。</p>
+        </div>
       </NCard>
 
       <!-- 使用说明 -->
@@ -609,14 +512,13 @@ watch(
               <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.6" />
               <path d="M10 9v5M10 6v1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
             </svg>
-            <span>使用说明</span>
+            <span>数据管理</span>
           </div>
         </template>
         <div class="about-content">
-          <p>1. 确保 MySQL 服务已启动并创建了对应数据库。</p>
-          <p>2. 执行建库 SQL：<code>CREATE DATABASE xuflow CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;</code></p>
-          <p>3. 填写连接信息后点击「保存并连接」，系统自动创建所需表结构。</p>
-          <p>4. 连接成功后，所有项目和会话数据将写入 MySQL，原有 localStorage 数据自动迁移。</p>
+          <p>1. 数据存储在系统应用数据目录，卸载应用时可能需要手动清理。</p>
+          <p>2. 如需备份，直接复制 <code>xuflow.db</code> 文件即可。</p>
+          <p>3. 首次启动时，原有的浏览器 localStorage 数据会自动迁移到 SQLite。</p>
         </div>
       </NCard>
     </div>
