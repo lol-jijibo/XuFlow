@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import StreamText from "./StreamText.vue";
 import ToolCallGroup from "./ToolCallGroup.vue";
 import ReasoningBlock from "./ReasoningBlock.vue";
@@ -15,33 +15,127 @@ const themeStore = useThemeStore();
 const isUser = computed(() => props.message.role === "user");
 const isAssistant = computed(() => props.message.role === "assistant");
 const hasToolCalls = computed(() => (props.message.toolCalls?.length ?? 0) > 0);
+const hasReasoning = computed(() => !!props.message.reasoning && props.message.reasoning.length > 0);
+const reasoningPrompts = [
+  "Brewing a reply...",
+  "Drafting it...",
+  "Putting it together...",
+  "Polishing the words...",
+  "Cooking up an answer...",
+  "Wrapping it nicely...",
+  "Magic in progress...",
+  "Summoning a reply...",
+  "Stitching it up...",
+  "Sprinkling some polish...",
+  "Almost speaking...",
+  "Making it neat...",
+] as const;
+const reasoningPromptIndex = ref(0);
+let reasoningPromptTimer: ReturnType<typeof setInterval> | null = null;
 
-// ── Thinking / done state ───────────────────────────────────────────
-
-/** Whether every tool call in this message has completed. */
+/**
+ * 判断当前消息中的工具调用是否全部结束。
+ * 通过遍历所有工具结果状态，决定展示执行中还是完成摘要。
+ */
 const allToolsDone = computed(() => {
   if (!hasToolCalls.value) return true;
   return (props.message.toolCalls ?? []).every((tc) => tc.resultDone);
 });
 
-/** Tools are still executing — show the thinking indicator. */
-const isThinking = computed(() => hasToolCalls.value && !allToolsDone.value);
+/**
+ * 判断当前消息是否仍处于执行阶段。
+ * 仅在最终回答尚未结束时维持统一的运行态提示。
+ */
+const isRunning = computed(() => !props.message.done);
 
-/** User has clicked "Done, click to view…" to expand the summary. */
+/**
+ * 判断当前阶段是否正在调用工具。
+ * 当工具调用已出现且仍有未返回结果的条目时进入该阶段。
+ */
+const isToolRunning = computed(() => hasToolCalls.value && !allToolsDone.value);
+
+/**
+ * 判断当前阶段是否正在组织最终回答。
+ * 当工具已完成或无需工具但消息仍未结束时展示生成状态。
+ */
+const isPromptRotatingPhase = computed(() => isRunning.value && !isToolRunning.value);
+
+const activeReasoningPrompt = computed(() => {
+  return reasoningPrompts[reasoningPromptIndex.value];
+});
+
+/**
+ * 生成当前消息顶部的统一状态文案。
+ * 根据推理、工具调用和正文输出的先后阶段返回对应提示。
+ */
+const agentStatusText = computed(() => {
+  if (isPromptRotatingPhase.value) return activeReasoningPrompt.value;
+  if (isToolRunning.value) return "调用工具中...";
+  return "";
+});
+
+function stopReasoningPromptRotation() {
+  if (reasoningPromptTimer === null) return;
+  clearInterval(reasoningPromptTimer);
+  reasoningPromptTimer = null;
+}
+
+function startReasoningPromptRotation() {
+  stopReasoningPromptRotation();
+  reasoningPromptIndex.value = 0;
+  reasoningPromptTimer = setInterval(() => {
+    reasoningPromptIndex.value = (reasoningPromptIndex.value + 1) % reasoningPrompts.length;
+  }, 1800);
+}
+
+/**
+ * 记录工具完成明细的展开状态。
+ * 用户点击完成状态后切换工具分组明细的展开与收起。
+ */
 const showToolDetails = ref(false);
 
-// Reset details visibility when a new batch of tools starts running
-watch(isThinking, (thinking) => {
-  if (thinking) {
+/**
+ * 判断是否需要展示工具完成状态行。
+ * 仅在消息结束且确实发生过工具调用后显示完成提示。
+ */
+const showToolDoneStatus = computed(() => hasToolCalls.value && !isRunning.value);
+
+/**
+ * 判断是否需要展示运行中状态行。
+ * 当消息仍在执行时将思考、工具和生成阶段统一展示在文本流顶部。
+ */
+const showRunningStatus = computed(() => !!agentStatusText.value);
+
+/**
+ * 按类别汇总工具调用结果。
+ * 将原始工具调用列表整理成适合折叠展示的分组结构。
+ */
+const toolGroups = computed(() => {
+  if (!hasToolCalls.value) return [];
+  return groupToolCalls(props.message.toolCalls ?? []);
+});
+
+watch(isRunning, (running) => {
+  if (running) {
     showToolDetails.value = false;
   }
 });
 
-// ── Tool call grouping ──────────────────────────────────────────────
+watch(
+  isPromptRotatingPhase,
+  (isActive) => {
+    if (isActive) {
+      startReasoningPromptRotation();
+      return;
+    }
 
-const toolGroups = computed(() => {
-  if (!hasToolCalls.value) return [];
-  return groupToolCalls(props.message.toolCalls ?? []);
+    stopReasoningPromptRotation();
+  },
+  { immediate: true }
+);
+
+onBeforeUnmount(() => {
+  stopReasoningPromptRotation();
 });
 </script>
 
@@ -50,50 +144,83 @@ const toolGroups = computed(() => {
     class="message-item"
     :class="{ user: isUser, assistant: isAssistant, dark: themeStore.isDark }"
   >
-    <!-- ── User message: right-aligned pill ── -->
     <template v-if="isUser">
       <div class="user-pill">
         <span class="user-pill-text">{{ message.content }}</span>
       </div>
     </template>
 
-    <!-- ── AI message: thinking process at top, text below ── -->
     <template v-else-if="isAssistant">
-      <div class="agent-block">
-        <!-- ── LLM Reasoning / Thinking block ── -->
-        <ReasoningBlock
-          :reasoning="message.reasoning"
-          :reasoning-done="message.reasoningDone"
-          v-model="message.reasoningExpanded"
-        />
-
-        <!-- ── Thinking / Tool calls — TOP ── -->
-        <div v-if="hasToolCalls" class="tool-calls-block">
-          <!-- State 1: Thinking — tools still running -->
-          <div v-if="isThinking" class="thinking-indicator">
-            <span class="thinking-ring">
-              <span class="thinking-ring-inner"></span>
-            </span>
-            <span class="thinking-text">Thinking, wait a moment...</span>
-          </div>
-
-          <!-- State 2: Done — persistent header, click to toggle details below -->
-          <div v-else class="tool-done-block">
-            <div
-              class="thinking-done"
-              :class="{ expanded: showToolDetails }"
-              @click="showToolDetails = !showToolDetails"
+      <div class="assistant-message-row">
+        <div class="assistant-avatar-column" aria-hidden="true">
+          <span
+            class="assistant-avatar-glyph"
+            :class="{
+              streaming: showRunningStatus,
+              done: !showRunningStatus
+            }"
+          >
+            <svg
+              class="assistant-robot-svg"
+              width="32"
+              height="32"
+              viewBox="0 0 32 32"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
             >
-              <span class="done-icon">✓</span>
-              <span class="done-text">
-                {{ showToolDetails ? 'Done' : 'Done, click to view...' }}
-              </span>
-              <span class="done-chevron">{{ showToolDetails ? '▾' : '▸' }}</span>
-            </div>
+              <g class="assistant-glow">
+                <circle cx="16" cy="17" r="12" />
+              </g>
+              <g class="assistant-antenna">
+                <path class="assistant-antenna-line" d="M16 9V5.8" />
+                <circle class="assistant-signal" cx="16" cy="4.5" r="2.6" />
+              </g>
+              <rect class="assistant-head" x="6.5" y="10" width="19" height="15" rx="6.5" />
+              <rect class="assistant-face-shine" x="8.2" y="11.4" width="15.6" height="4.8" rx="2.4" />
+              <circle class="assistant-eye assistant-eye-left" cx="12.4" cy="17.2" r="2" />
+              <circle class="assistant-eye assistant-eye-right" cx="19.6" cy="17.2" r="2" />
+              <path class="assistant-mouth" d="M13.4 21.1H18.6" />
+              <g v-if="showRunningStatus" class="assistant-pulse-lines">
+                <path class="assistant-pulse-line assistant-pulse-line-first" d="M26.4 15.4H30" />
+                <path class="assistant-pulse-line assistant-pulse-line-second" d="M26.4 19H31" />
+              </g>
+              <g v-if="showRunningStatus" class="assistant-dot-flow">
+                <circle class="assistant-dot assistant-dot-first" cx="12" cy="29" r="1.15" />
+                <circle class="assistant-dot assistant-dot-second" cx="16" cy="29" r="1.15" />
+                <circle class="assistant-dot assistant-dot-third" cx="20" cy="29" r="1.15" />
+              </g>
+            </svg>
+          </span>
+        </div>
 
-            <!-- Expandable: group headers, click to drill down -->
-            <div v-if="showToolDetails" class="tool-done-details">
-              <div class="tool-groups-list">
+        <div class="assistant-content-column">
+          <div class="assistant-flow">
+            <p v-if="showRunningStatus" class="assistant-flow-status">
+              {{ agentStatusText }}
+            </p>
+
+            <ReasoningBlock
+              v-if="hasReasoning"
+              :reasoning="message.reasoning"
+              :reasoning-done="message.reasoningDone"
+              v-model="message.reasoningExpanded"
+            />
+
+            <div
+              v-if="showToolDoneStatus"
+              class="assistant-tool-status"
+            >
+              <button
+                class="assistant-flow-status assistant-tool-toggle"
+                type="button"
+                @click="showToolDetails = !showToolDetails"
+              >
+                <span class="assistant-tool-check" aria-hidden="true">✓</span>
+                <span>工具调用已完成</span>
+                <span class="assistant-tool-chevron">{{ showToolDetails ? "▾" : "▸" }}</span>
+              </button>
+
+              <div v-if="showToolDetails" class="assistant-tool-details">
                 <ToolCallGroup
                   v-for="group in toolGroups"
                   :key="group.category"
@@ -101,22 +228,22 @@ const toolGroups = computed(() => {
                 />
               </div>
             </div>
-          </div>
-        </div>
 
-        <!-- ── AI text response — BELOW ── -->
-        <StreamText
-          :text="message.content"
-          :done="message.done"
-        />
-        <!-- Typing indicator when streaming empty -->
-        <div
-          v-if="!message.content && !message.done"
-          class="typing-indicator"
-        >
-          <span class="dot"></span>
-          <span class="dot"></span>
-          <span class="dot"></span>
+            <StreamText
+              v-if="message.content"
+              :text="message.content"
+              :done="message.done"
+            />
+
+            <div
+              v-else-if="!message.done"
+              class="typing-indicator"
+            >
+              <span class="dot"></span>
+              <span class="dot"></span>
+              <span class="dot"></span>
+            </div>
+          </div>
         </div>
       </div>
     </template>
@@ -124,7 +251,6 @@ const toolGroups = computed(() => {
 </template>
 
 <style scoped>
-/* ── Message container ── */
 .message-item {
   display: flex;
   align-items: flex-start;
@@ -140,17 +266,16 @@ const toolGroups = computed(() => {
   justify-content: flex-start;
 }
 
-/* ── User pill — minimal tag, no bubble ── */
 .user-pill {
   max-width: 75%;
-  background: #2E3036;
+  background: #2e3036;
   padding: 10px 18px;
   border-radius: 10px;
   transition: background 0.2s ease;
 }
 
 .dark .user-pill {
-  background: #2E3036;
+  background: #2e3036;
 }
 
 .message-item:not(.dark) .user-pill {
@@ -169,301 +294,186 @@ const toolGroups = computed(() => {
   color: #1e293b;
 }
 
-/* ── Agent block — full-width structured text ── */
-.agent-block {
+.assistant-message-row {
   width: 100%;
-  padding: 0;
-}
-
-/* ── Tool calls block (now at top of message) ── */
-.tool-calls-block {
-  margin-bottom: 16px;
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-/* ── Thinking indicator (tools running) ── */
-.thinking-indicator {
-  display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
-  padding: 8px 0;
-  user-select: none;
 }
 
-/* Spinning ring */
-.thinking-ring {
-  position: relative;
-  width: 18px;
-  height: 18px;
+.assistant-avatar-column {
+  width: 36px;
   flex-shrink: 0;
-  border-radius: 50%;
-  background: conic-gradient(
-    rgba(99, 102, 241, 0.8) 0%,
-    rgba(99, 102, 241, 0.3) 40%,
-    rgba(128, 128, 128, 0.08) 60%,
-    rgba(128, 128, 128, 0.08) 100%
-  );
-  animation: thinkSpin 1s linear infinite;
+  padding-top: 0;
 }
 
-.thinking-ring-inner {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: #fafafa;
+.assistant-avatar-glyph {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
 }
 
-.dark .thinking-ring-inner {
-  background: #1a1a20;
+.assistant-content-column {
+  min-width: 0;
+  flex: 1;
 }
 
-.thinking-text {
-  font-size: 13px;
-  font-weight: 460;
-  color: #888;
-  letter-spacing: 0.01em;
-}
-
-.dark .thinking-text {
-  color: #9ca3af;
-}
-
-/* ── Done state (persistent header, click to toggle) ── */
-.tool-done-block {
+.assistant-flow {
   display: flex;
   flex-direction: column;
+  gap: 10px;
+  min-width: 0;
 }
 
-.thinking-done {
+.assistant-flow-status {
+  margin: 0;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 0;
-  cursor: pointer;
-  user-select: none;
-  border-radius: 8px;
-  transition: background 0.12s ease;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #9ca3af;
+  font-weight: 520;
 }
 
-.thinking-done:hover {
-  background: rgba(128, 128, 128, 0.04);
-}
-
-.done-icon {
-  width: 18px;
-  height: 18px;
+.assistant-tool-status {
   display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.assistant-tool-toggle {
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.assistant-tool-check {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
+  border-radius: 999px;
   background: #22c55e;
-  color: #fff;
-  font-size: 11px;
+  color: #ffffff;
+  font-size: 10px;
   font-weight: 700;
   flex-shrink: 0;
 }
 
-.done-text {
-  font-size: 13px;
-  font-weight: 460;
-  color: #888;
-  letter-spacing: 0.01em;
-  transition: color 0.12s ease;
-}
-
-.thinking-done:hover .done-text {
-  color: #aaa;
-}
-
-.done-chevron {
-  margin-left: auto;
+.assistant-tool-chevron {
+  color: #6b7280;
   font-size: 11px;
-  color: #888;
-  transition: transform 0.15s ease;
 }
 
-.dark .done-text {
-  color: #9ca3af;
+.assistant-tool-details {
+  margin-left: 24px;
 }
 
-.dark .thinking-done:hover .done-text {
-  color: #d1d5db;
+.assistant-robot-svg {
+  display: block;
+  width: 36px;
+  height: 36px;
+  overflow: visible;
 }
 
-.dark .thinking-done:hover {
-  background: rgba(255, 255, 255, 0.04);
+.assistant-glow circle {
+  fill: rgba(126, 144, 255, 0.08);
+  filter: blur(4px);
 }
 
-.dark .done-chevron {
-  color: #9ca3af;
+.assistant-head {
+  fill: rgba(31, 37, 49, 0.94);
+  stroke: rgba(126, 144, 255, 0.62);
+  stroke-width: 1.35;
 }
 
-/* Expandable details below the Done header */
-.tool-done-details {
-  margin-top: 4px;
-  padding-left: 4px;
-  animation: doneDetailsIn 0.2s ease;
+.assistant-face-shine {
+  fill: rgba(255, 255, 255, 0.045);
 }
 
-@keyframes doneDetailsIn {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.assistant-eye {
+  fill: #eef3ff;
 }
 
-@keyframes thinkSpin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+.assistant-mouth {
+  stroke: rgba(205, 216, 236, 0.86);
+  stroke-width: 1.8;
+  stroke-linecap: round;
 }
 
-/* ── Summary chips bar ── */
-.tool-summary-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  padding: 4px 0;
+.assistant-antenna-line {
+  stroke: rgba(126, 144, 255, 0.76);
+  stroke-width: 1.5;
+  stroke-linecap: round;
 }
 
-.summary-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 10px;
-  border: 1px solid rgba(128, 128, 128, 0.15);
-  border-radius: 12px;
-  font-size: 12px;
-  font-weight: 500;
-  color: #888;
-  background: rgba(128, 128, 128, 0.04);
-  cursor: pointer;
-  user-select: none;
-  transition: all 0.15s ease;
+.assistant-signal {
+  fill: #86a4ff;
 }
 
-.summary-chip:hover {
-  background: rgba(128, 128, 128, 0.08);
-  color: #aaa;
+.assistant-pulse-lines {
+  stroke-linecap: round;
 }
 
-.summary-chip.active {
-  color: #fff;
+.assistant-pulse-line {
+  stroke: rgba(82, 216, 168, 0.78);
+  stroke-width: 1.6;
+  animation: assistantPulseSweep 1.4s ease-in-out infinite;
 }
 
-/* Category-specific active colors */
-.summary-chip.chip-file_read.active {
-  background: #3b82f6;
-  border-color: #3b82f6;
-  color: #fff;
+.assistant-pulse-line-second {
+  animation-delay: 0.14s;
 }
 
-.summary-chip.chip-file_write.active {
-  background: #f97316;
-  border-color: #f97316;
-  color: #fff;
+.assistant-dot-flow {
+  fill: rgba(116, 223, 123, 0.82);
 }
 
-.summary-chip.chip-search.active {
-  background: #22c55e;
-  border-color: #22c55e;
-  color: #fff;
+.assistant-dot {
+  animation: assistantDotFlow 1.2s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
 }
 
-.summary-chip.chip-directory.active {
-  background: #a855f7;
-  border-color: #a855f7;
-  color: #fff;
+.assistant-dot-second {
+  animation-delay: 0.15s;
 }
 
-.summary-chip.chip-shell.active {
-  background: #6b7280;
-  border-color: #6b7280;
-  color: #fff;
+.assistant-dot-third {
+  animation-delay: 0.3s;
 }
 
-.summary-chip.chip-web.active {
-  background: #0ea5e9;
-  border-color: #0ea5e9;
-  color: #fff;
+.assistant-avatar-glyph.streaming .assistant-head {
+  stroke: rgba(126, 144, 255, 0.78);
 }
 
-.summary-chip.chip-git.active {
-  background: #ec4899;
-  border-color: #ec4899;
-  color: #fff;
+.assistant-avatar-glyph.streaming .assistant-signal {
+  animation: assistantSignalGlow 1.6s ease-in-out infinite;
 }
 
-.summary-chip.chip-plan.active {
-  background: #eab308;
-  border-color: #eab308;
-  color: #1a1a1a;
+.assistant-avatar-glyph.done .assistant-head {
+  stroke: rgba(57, 199, 109, 0.54);
+  fill: rgba(29, 36, 44, 0.92);
 }
 
-/* Dark mode chip defaults */
-.dark .summary-chip {
-  border-color: rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
-  color: #9ca3af;
+.assistant-avatar-glyph.done .assistant-signal {
+  fill: rgba(57, 199, 109, 0.82);
 }
 
-.dark .summary-chip:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #d1d5db;
+.assistant-avatar-glyph.done .assistant-mouth {
+  stroke: rgba(234, 255, 240, 0.92);
 }
 
-.dark .summary-chip.active {
-  color: #fff;
-}
-
-/* Summary toggle button */
-.summary-toggle {
-  margin-left: auto;
-  padding: 3px 8px;
-  border: none;
-  border-radius: 10px;
-  font-size: 11px;
-  font-weight: 460;
-  color: #888;
-  background: transparent;
-  cursor: pointer;
-  user-select: none;
-  white-space: nowrap;
-  transition: color 0.12s ease;
-}
-
-.summary-toggle:hover {
-  color: #aaa;
-}
-
-.dark .summary-toggle {
-  color: #9ca3af;
-}
-
-.dark .summary-toggle:hover {
-  color: #d1d5db;
-}
-
-/* Tool groups list container */
-.tool-groups-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-/* ── Typing indicator ── */
 .typing-indicator {
   display: flex;
   gap: 6px;
-  padding: 8px 0;
+  padding: 4px 0 0;
 }
 
 .dot {
@@ -472,6 +482,14 @@ const toolGroups = computed(() => {
   border-radius: 50%;
   background: #6b7280;
   animation: blink 1.4s infinite both;
+}
+
+.dark .assistant-flow-status {
+  color: #9ca3af;
+}
+
+.dark .assistant-tool-chevron {
+  color: #9ca3af;
 }
 
 .dark .dot {
@@ -484,6 +502,39 @@ const toolGroups = computed(() => {
 
 .dot:nth-child(3) {
   animation-delay: 0.4s;
+}
+
+@keyframes assistantSignalGlow {
+  0%, 100% {
+    transform: scale(0.92);
+    opacity: 0.76;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+}
+
+@keyframes assistantPulseSweep {
+  0%, 100% {
+    opacity: 0.24;
+    transform: translateX(-1px);
+  }
+  50% {
+    opacity: 0.96;
+    transform: translateX(1px);
+  }
+}
+
+@keyframes assistantDotFlow {
+  0%, 100% {
+    opacity: 0.28;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 0.92;
+    transform: translateY(-1px);
+  }
 }
 
 @keyframes blink {

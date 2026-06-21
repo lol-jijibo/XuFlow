@@ -1,0 +1,118 @@
+<svg width="1440" height="980" viewBox="0 0 1440 980" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="220" y1="60" x2="1180" y2="980" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#171A20"/>
+      <stop offset="1" stop-color="#0E1117"/>
+    </linearGradient>
+    <linearGradient id="panelFill" x1="0" y1="0" x2="1120" y2="140" gradientUnits="userSpaceOnUse">
+      <stop stop-color="rgba(255,255,255,0.035)"/>
+      <stop offset="1" stop-color="rgba(255,255,255,0.018)"/>
+    </linearGradient>
+    <linearGradient id="strokeSoft" x1="0" y1="0" x2="1120" y2="140" gradientUnits="userSpaceOnUse">
+      <stop stop-color="rgba(255,255,255,0.10)"/>
+      <stop offset="1" stop-color="rgba(255,255,255,0.05)"/>
+    </linearGradient>
+    <linearGradient id="coolA" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#87A6FF"/>
+      <stop offset="1" stop-color="#5470D9"/>
+    </linearGradient>
+    <linearGradient id="coolB" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7CC4D8"/>
+      <stop offset="1" stop-color="#3E879D"/>
+    </linearGradient>
+    <linearGradient id="coolC" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8AD2C4"/>
+      <stop offset="1" stop-color="#4A9486"/>
+    </linearGradient>
+    <filter id="blurGlow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="12"/>
+    </filter>
+    <style>
+      .title { font: 700 38px "Microsoft YaHei", "PingFang SC", sans-serif; fill: #F5F7FA; }
+      .subtitle { font: 400 18px "Microsoft YaHei", "PingFang SC", sans-serif; fill: #8C96A8; }
+      .eyebrow { font: 600 13px "Microsoft YaHei", "PingFang SC", sans-serif; fill: #AAB5C8; letter-spacing: 0.8px; }
+      .status { font: 600 20px "Microsoft YaHei", "PingFang SC", sans-serif; fill: #E7ECF5; }
+      .hint { font: 400 15px "Microsoft YaHei", "PingFang SC", sans-serif; fill: #8791A3; }
+      .footnote { font: 500 17px "Microsoft YaHei", "PingFang SC", sans-serif; fill: #D3DAE7; }
+    </style>
+  </defs>
+
+  <rect width="1440" height="980" fill="url(#bg)"/>
+  <circle cx="1244" cy="152" r="230" fill="#1A2232" opacity="0.22"/>
+  <circle cx="132" cy="900" r="270" fill="#111823" opacity="0.28"/>
+
+  <text x="156" y="112" class="title">方案二 · 专业冷静版小助手符号</text>
+  <text x="156" y="148" class="subtitle">静态样式图。真实动效建议只有信号点微闪、侧边扫光、底部细点流动，整体像系统自带状态组件。</text>
+
+  <g transform="translate(156 226)">
+    <text x="0" y="0" class="eyebrow">STATE A</text>
+    <rect x="0" y="26" width="1128" height="126" rx="24" fill="url(#panelFill)" stroke="url(#strokeSoft)"/>
+    <g transform="translate(32 52)">
+      <circle cx="30" cy="36" r="24" fill="#86A4FF" opacity="0.10" filter="url(#blurGlow)"/>
+      <rect x="10" y="14" width="40" height="44" rx="18" fill="#202633" stroke="url(#coolA)" stroke-width="1.6"/>
+      <rect x="18" y="24" width="24" height="4" rx="2" fill="#DCE6F9" opacity="0.92"/>
+      <rect x="18" y="32" width="16" height="3" rx="1.5" fill="#A8B8D7" opacity="0.88"/>
+      <rect x="18" y="39" width="20" height="3" rx="1.5" fill="#A8B8D7" opacity="0.52"/>
+      <circle cx="44" cy="18" r="4" fill="#89A7FF"/>
+    </g>
+    <text x="108" y="90" class="status">思考中...</text>
+    <text x="108" y="120" class="hint">更像抽象的 AI core 符号，不做五官和表情，只保留顶部信号点作为轻微动态来源。</text>
+  </g>
+
+  <g transform="translate(156 394)">
+    <text x="0" y="0" class="eyebrow">STATE B</text>
+    <rect x="0" y="26" width="1128" height="126" rx="24" fill="url(#panelFill)" stroke="url(#strokeSoft)"/>
+    <g transform="translate(32 52)">
+      <circle cx="30" cy="36" r="24" fill="#7BC5D8" opacity="0.10" filter="url(#blurGlow)"/>
+      <rect x="10" y="14" width="40" height="44" rx="18" fill="#1E2A2F" stroke="url(#coolB)" stroke-width="1.6"/>
+      <rect x="18" y="24" width="24" height="4" rx="2" fill="#E3F3F7" opacity="0.92"/>
+      <rect x="18" y="32" width="16" height="3" rx="1.5" fill="#AFCDD5" opacity="0.88"/>
+      <rect x="18" y="39" width="20" height="3" rx="1.5" fill="#AFCDD5" opacity="0.52"/>
+      <rect x="46" y="27" width="8" height="2" rx="1" fill="#80C9DA" opacity="0.95"/>
+      <rect x="50" y="34" width="12" height="2" rx="1" fill="#80C9DA" opacity="0.70"/>
+      <rect x="46" y="41" width="9" height="2" rx="1" fill="#80C9DA" opacity="0.42"/>
+    </g>
+    <text x="108" y="90" class="status">调用工具中...</text>
+    <text x="108" y="120" class="hint">侧边细扫光代表系统在与工具层交换信息，动作短且克制，不会有卡通感。</text>
+  </g>
+
+  <g transform="translate(156 562)">
+    <text x="0" y="0" class="eyebrow">STATE C</text>
+    <rect x="0" y="26" width="1128" height="126" rx="24" fill="url(#panelFill)" stroke="url(#strokeSoft)"/>
+    <g transform="translate(32 52)">
+      <circle cx="30" cy="36" r="24" fill="#8BD0C4" opacity="0.10" filter="url(#blurGlow)"/>
+      <rect x="10" y="14" width="40" height="44" rx="18" fill="#1F2928" stroke="url(#coolC)" stroke-width="1.6"/>
+      <rect x="18" y="24" width="24" height="4" rx="2" fill="#E8F7F4" opacity="0.92"/>
+      <rect x="18" y="32" width="16" height="3" rx="1.5" fill="#B3D2CD" opacity="0.88"/>
+      <rect x="18" y="39" width="20" height="3" rx="1.5" fill="#B3D2CD" opacity="0.52"/>
+      <circle cx="20" cy="64" r="2.1" fill="#89D3C6"/>
+      <circle cx="30" cy="64" r="2.1" fill="#89D3C6" opacity="0.72"/>
+      <circle cx="40" cy="64" r="2.1" fill="#89D3C6" opacity="0.46"/>
+    </g>
+    <text x="108" y="90" class="status">正在生成回答...</text>
+    <text x="108" y="120" class="hint">回答阶段不再扫光，只保留底部细点节奏，视觉更安静，也更像输出过程。</text>
+  </g>
+
+  <g transform="translate(156 730)">
+    <text x="0" y="0" class="eyebrow">STATE D</text>
+    <rect x="0" y="26" width="1128" height="126" rx="24" fill="rgba(122,196,216,0.025)" stroke="rgba(124,196,216,0.18)"/>
+    <g transform="translate(32 52)">
+      <circle cx="30" cy="36" r="24" fill="#7CC4D8" opacity="0.08" filter="url(#blurGlow)"/>
+      <rect x="10" y="14" width="40" height="44" rx="18" fill="#1F262D" stroke="#71B7CA" stroke-width="1.6"/>
+      <path d="M21 37L27 43L40 28" stroke="#EAF4F7" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <text x="108" y="90" class="status">工具调用已完成</text>
+    <text x="108" y="120" class="hint">完成态完全静止，只留下干净的确认标记，不再有任何呼吸或扫动。</text>
+  </g>
+
+  <g transform="translate(942 228)">
+    <rect x="0" y="0" width="252" height="188" rx="20" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+    <text x="24" y="40" class="eyebrow">这版的原则</text>
+    <text x="24" y="76" class="hint">1. 不拟人，不卖萌</text>
+    <text x="24" y="104" class="hint">2. 冷色、低饱和、弱发光</text>
+    <text x="24" y="132" class="hint">3. 动效只承担在线反馈</text>
+    <text x="24" y="160" class="hint">4. 完成后立即静止</text>
+  </g>
+
+  <text x="184" y="930" class="footnote">如果这个方向对了，我下一步可以把它直接做进消息顶部状态条，并把动画幅度控制得非常轻。</text>
+</svg>

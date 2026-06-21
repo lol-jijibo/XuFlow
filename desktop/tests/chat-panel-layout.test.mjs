@@ -67,7 +67,7 @@ test("Project label stays left while ready status stays right in StatusBar", () 
     /class="status-left"[\s\S]*class="project-label"[\s\S]*class="project-name"[\s\S]*Xuflow[\s\S]*class="status-right"[\s\S]*class="status-label"[\s\S]*class="version-label"/m,
     "status bar should render project label on the left and ready state on the right"
   );
-  assert.doesNotMatch(statusBarSource, /本地/, "project label should not include the local suffix");
+  assert.doesNotMatch(statusBarSource, /鏈湴/, "project label should not include the local suffix");
   assert.match(
     statusBarSource,
     /\.status-left\s*\{[\s\S]*flex-shrink:\s*0;/m,
@@ -155,12 +155,203 @@ test("ChatPanel context capacity strip follows compact status-bar grouping", () 
   );
   assert.match(
     source,
-    /class="footbar-left"[\s\S]*class="model-name-label"/m,
-    "left side should show the active model name"
+    /class="footbar-left"[\s\S]*class="footbar-model-select"/m,
+    "left side should render a borderless NSelect matching the top TitleBar model options"
   );
   assert.match(
     source,
     /\.chat-footbar\s*\{[\s\S]*height:\s*48px;/m,
     "context capacity strip should use the compact height of a status row"
+  );
+});
+
+test("MessageItem renders assistant content as a left-avatar row with a single right-side text flow", () => {
+  const source = readFileSync(
+    resolve("desktop/src/components/chat/MessageItem.vue"),
+    "utf8"
+  );
+
+  assert.match(
+    source,
+    /class="assistant-message-row"/,
+    "assistant message should use a dedicated left-avatar row"
+  );
+  assert.match(
+    source,
+    /class="assistant-avatar-column"/,
+    "assistant avatar should occupy the left-side column"
+  );
+  assert.match(
+    source,
+    /class="assistant-content-column"/,
+    "assistant status and answer should share the same right-side column"
+  );
+  assert.match(
+    source,
+    /class="assistant-flow"/,
+    "assistant content should render as a single vertical flow"
+  );
+  assert.match(
+    source,
+    /class="assistant-avatar-glyph"/,
+    "assistant row should keep the robot glyph in the avatar column"
+  );
+  assert.doesNotMatch(
+    source,
+    /class="agent-block"/,
+    "assistant message should no longer use the old centered block wrapper"
+  );
+  assert.doesNotMatch(
+    source,
+    /class="tool-calls-block"/,
+    "assistant message should no longer split status into a detached tool block"
+  );
+  assert.doesNotMatch(
+    source,
+    /class="thinking-done"/,
+    "assistant message should no longer show a standalone completion badge row"
+  );
+});
+
+test("MessageItem keeps status text inside the assistant text flow instead of detached cards", () => {
+  const source = readFileSync(
+    resolve("desktop/src/components/chat/MessageItem.vue"),
+    "utf8"
+  );
+
+  assert.match(
+    source,
+    /const reasoningPrompts = \[/,
+    "assistant flow should define a rotating prompt list for the thinking phase"
+  );
+  assert.match(
+    source,
+    /Brewing a reply\.\.\./,
+    "assistant flow should include the brewing prompt in the rotation"
+  );
+  assert.match(
+    source,
+    /Putting it together\.\.\./,
+    "assistant flow should include the assembly prompt in the rotation"
+  );
+  assert.match(
+    source,
+    /Drafting it\.\.\./,
+    "assistant flow should include the drafting prompt in the rotation"
+  );
+  assert.match(
+    source,
+    /Polishing the words\.\.\./,
+    "assistant flow should include the polishing prompt in the rotation"
+  );
+  assert.match(
+    source,
+    /Cooking up an answer\.\.\./,
+    "assistant flow should include the playful cooking prompt in the rotation"
+  );
+  assert.match(
+    source,
+    /reasoningPromptIndex\.value = \(reasoningPromptIndex\.value \+ 1\) % reasoningPrompts\.length/,
+    "assistant flow should advance through the thinking prompts in a loop"
+  );
+  assert.doesNotMatch(
+    source,
+    /return "思考中\.\.\."/,
+    "assistant flow should no longer hardcode the old thinking label"
+  );
+  assert.match(
+    source,
+    /调用工具中\.\.\./,
+    "assistant flow should expose a visible tool-running phase"
+  );
+  assert.match(
+    source,
+    /if \(isPromptRotatingPhase\.value\) return activeReasoningPrompt\.value;/,
+    "assistant flow should reuse the rotating English prompts for the full non-tool streaming phase"
+  );
+  assert.match(
+    source,
+    /工具调用已完成/,
+    "assistant flow should keep the tool completion state as inline text"
+  );
+  assert.match(
+    source,
+    /class="assistant-flow-status"/,
+    "assistant flow should use lightweight status rows inside the text stream"
+  );
+  assert.doesNotMatch(
+    source,
+    /class="thinking-indicator"/,
+    "assistant message should no longer use the detached indicator row"
+  );
+});
+
+test("ReasoningBlock becomes a lightweight content section without its own avatar gutter", () => {
+  const source = readFileSync(
+    resolve("desktop/src/components/chat/ReasoningBlock.vue"),
+    "utf8"
+  );
+
+  assert.match(
+    source,
+    /class="reasoning-section"/,
+    "reasoning should remain a content section inside the assistant flow"
+  );
+  assert.match(
+    source,
+    /class="reasoning-status-button"/,
+    "reasoning section should keep a lightweight inline expand toggle"
+  );
+  assert.doesNotMatch(
+    source,
+    /class="assistant-robot-svg"/,
+    "reasoning section should no longer render a nested avatar icon"
+  );
+  assert.doesNotMatch(
+    source,
+    /class="assistant-glyph"/,
+    "reasoning section should no longer reserve a separate avatar gutter"
+  );
+  assert.doesNotMatch(
+    source,
+    /class="reasoning-layout"/,
+    "reasoning section should no longer manage a detached avatar layout"
+  );
+  assert.match(
+    source,
+    /\.reasoning-section\s*\{[\s\S]*margin:\s*0;/m,
+    "reasoning section should sit flush inside the assistant text flow"
+  );
+  assert.match(
+    source,
+    /\.reasoning-content\s*\{[\s\S]*padding:\s*0;/m,
+    "reasoning details should expand inline without card padding"
+  );
+});
+
+test("Assistant avatar and reasoning-complete label share the same first-line height", () => {
+  const messageItemSource = readFileSync(
+    resolve("desktop/src/components/chat/MessageItem.vue"),
+    "utf8"
+  );
+  const reasoningSource = readFileSync(
+    resolve("desktop/src/components/chat/ReasoningBlock.vue"),
+    "utf8"
+  );
+
+  assert.match(
+    messageItemSource,
+    /\.assistant-avatar-column\s*\{[\s\S]*width:\s*36px;[\s\S]*padding-top:\s*0;/m,
+    "assistant avatar column should grow to 36px without adding a top offset above the reasoning row"
+  );
+  assert.match(
+    messageItemSource,
+    /\.assistant-avatar-glyph\s*\{[\s\S]*width:\s*36px;[\s\S]*height:\s*36px;/m,
+    "assistant avatar glyph should scale up with the larger robot size"
+  );
+  assert.match(
+    reasoningSource,
+    /\.reasoning-status-button\s*\{[\s\S]*min-height:\s*36px;/m,
+    "reasoning status row should use the same first-line height as the 36px robot avatar"
   );
 });

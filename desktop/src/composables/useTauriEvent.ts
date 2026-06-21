@@ -14,13 +14,58 @@ export function useTauriEvent() {
   /** Guard to ensure listeners are only registered once per composable instance. */
   let listenersSetup = false;
 
-  /** Throttled persist — saves at most once per second during streaming */
+  /** MySQL 模式下，向 MySQL 插入新消息行并记录 _dbId。 */
+  async function dbEnsureMessage(msg: ReturnType<typeof lastStreamingMsg>) {
+    if (!msg || !projectStore.dbConnected) return;
+    if (msg._dbId) return;
+    const tcJson = msg.toolCalls?.length
+      ? JSON.stringify(msg.toolCalls.map(t => ({ id: t.id, name: t.name, arguments: t.arguments, result: t.result, resultDone: t.resultDone })))
+      : undefined;
+    const id = await projectStore.dbAddMessage(
+      projectStore.activeConversationId ?? "",
+      msg.role,
+      msg.content,
+      msg.reasoning,
+      tcJson,
+    );
+    if (id) msg._dbId = id;
+  }
+
+  /** 向 MySQL 更新已存在消息行的最新内容。 */
+  async function dbSyncMessage(msg: ReturnType<typeof lastStreamingMsg>) {
+    if (!msg || !msg._dbId || !projectStore.dbConnected) return;
+    const fields: Record<string, unknown> = {
+      content: msg.content,
+      done: msg.done,
+      reasoning: msg.reasoning ?? null,
+      reasoning_done: msg.reasoningDone ?? false,
+    };
+    if (msg.toolCalls?.length) {
+      fields.tool_calls = msg.toolCalls.map(t => ({
+        id: t.id, name: t.name, arguments: t.arguments, result: t.result, resultDone: t.resultDone,
+      }));
+    }
+    await projectStore.dbUpdateMessage(msg._dbId, fields);
+  }
+
+  /** Throttled persist — MySQL 模式下实时插入/更新，localStorage 模式下节流写入。 */
   function schedulePersist() {
-    if (persistTimer) return;
-    persistTimer = setTimeout(() => {
-      projectStore.persistMessages();
-      persistTimer = null;
-    }, 1000);
+    const msg = lastStreamingMsg();
+    if (msg && projectStore.dbConnected) {
+      dbEnsureMessage(msg);
+      if (persistTimer) return;
+      persistTimer = setTimeout(async () => {
+        const current = lastStreamingMsg();
+        if (current) await dbSyncMessage(current);
+        persistTimer = null;
+      }, 1500);
+    } else {
+      if (persistTimer) return;
+      persistTimer = setTimeout(() => {
+        projectStore.persistMessages();
+        persistTimer = null;
+      }, 1000);
+    }
   }
 
   function flushPersist() {
@@ -28,7 +73,12 @@ export function useTauriEvent() {
       clearTimeout(persistTimer);
       persistTimer = null;
     }
-    projectStore.persistMessages();
+    const msg = lastStreamingMsg();
+    if (msg && projectStore.dbConnected) {
+      dbSyncMessage(msg);
+    } else {
+      projectStore.persistMessages();
+    }
   }
 
   /** Helper: get the last assistant message (must be streaming, i.e. done=false). */

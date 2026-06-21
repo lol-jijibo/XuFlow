@@ -1,0 +1,108 @@
+<svg width="1160" height="520" viewBox="0 0 1160 520" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="160" y1="40" x2="1000" y2="520" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#181A20"/>
+      <stop offset="1" stop-color="#101218"/>
+    </linearGradient>
+    <filter id="softBlur" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="4"/>
+    </filter>
+    <style>
+      .title { font: 700 30px "Microsoft YaHei", "PingFang SC", sans-serif; fill: #F4F7FB; }
+      .subtitle { font: 400 16px "Microsoft YaHei", "PingFang SC", sans-serif; fill: #8E97A8; }
+      .label { font: 600 15px "Microsoft YaHei", "PingFang SC", sans-serif; fill: #B9C2D0; }
+      .body { font: 400 17px "Microsoft YaHei", "PingFang SC", sans-serif; fill: #D6DCE8; }
+      .hint { font: 400 13px "Microsoft YaHei", "PingFang SC", sans-serif; fill: #858E9F; }
+      .panel { fill: #1B1D24; stroke: rgba(255,255,255,0.08); }
+      .panelSoft { fill: rgba(255,255,255,0.025); }
+      .robotGlow { fill: rgba(126,144,255,0.08); filter: url(#softBlur); }
+      .robotHead { fill: rgba(31,37,49,0.94); stroke: rgba(126,144,255,0.72); stroke-width: 1.35; }
+      .robotHeadDone { fill: rgba(29,36,44,0.92); stroke: rgba(57,199,109,0.54); stroke-width: 1.35; }
+      .faceShine { fill: rgba(255,255,255,0.045); }
+      .eye { fill: #EEF3FF; }
+      .mouth { stroke: rgba(205,216,236,0.86); stroke-width: 1.8; stroke-linecap: round; }
+      .antennaLine { stroke: rgba(126,144,255,0.76); stroke-width: 1.5; stroke-linecap: round; }
+      .signal { fill: #86A4FF; }
+      .signalDone { fill: rgba(57,199,109,0.82); }
+      .pulse { stroke: rgba(82,216,168,0.78); stroke-width: 1.6; stroke-linecap: round; }
+      .dot { fill: rgba(116,223,123,0.82); }
+      .divider { stroke: rgba(255,255,255,0.06); }
+      @keyframes signalGlow {
+        0%, 100% { transform: scale(0.92); opacity: .76; }
+        50% { transform: scale(1.08); opacity: 1; }
+      }
+      @keyframes pulseSweep {
+        0%, 100% { opacity: .24; transform: translateX(-1px); }
+        50% { opacity: .96; transform: translateX(1px); }
+      }
+      @keyframes dotFlow {
+        0%, 100% { opacity: .28; transform: translateY(0); }
+        50% { opacity: .92; transform: translateY(-1px); }
+      }
+      .animatedSignal { transform-box: fill-box; transform-origin: center; animation: signalGlow 1.6s ease-in-out infinite; }
+      .animatedPulseA { animation: pulseSweep 1.4s ease-in-out infinite; }
+      .animatedPulseB { animation: pulseSweep 1.4s ease-in-out infinite .14s; }
+      .animatedDotA { transform-box: fill-box; transform-origin: center; animation: dotFlow 1.2s ease-in-out infinite; }
+      .animatedDotB { transform-box: fill-box; transform-origin: center; animation: dotFlow 1.2s ease-in-out infinite .15s; }
+      .animatedDotC { transform-box: fill-box; transform-origin: center; animation: dotFlow 1.2s ease-in-out infinite .3s; }
+    </style>
+  </defs>
+
+  <rect width="1160" height="520" fill="url(#bg)"/>
+  <circle cx="985" cy="74" r="168" fill="#1B2432" opacity="0.22"/>
+  <circle cx="105" cy="480" r="180" fill="#111827" opacity="0.26"/>
+
+  <text x="72" y="74" class="title">当前小机器人图标效果预览</text>
+  <text x="72" y="104" class="subtitle">这张图按当前 ReasoningBlock.vue 的内联 SVG 风格绘制，展示思考中和完成后的两种状态。</text>
+
+  <g transform="translate(72 150)">
+    <text x="0" y="-20" class="hint">思考流式输出中</text>
+    <rect x="0" y="0" width="1016" height="72" rx="12" class="panel"/>
+    <rect x="1" y="1" width="1014" height="70" rx="11" class="panelSoft"/>
+    <g transform="translate(22 20)">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <circle class="robotGlow" cx="16" cy="17" r="12"/>
+        <path class="antennaLine" d="M16 9V5.8"/>
+        <circle class="signal animatedSignal" cx="16" cy="4.5" r="2.6"/>
+        <rect class="robotHead" x="6.5" y="10" width="19" height="15" rx="6.5"/>
+        <rect class="faceShine" x="8.2" y="11.4" width="15.6" height="4.8" rx="2.4"/>
+        <circle class="eye" cx="12.4" cy="17.2" r="2"/>
+        <circle class="eye" cx="19.6" cy="17.2" r="2"/>
+        <path class="mouth" d="M13.4 21.1H18.6"/>
+        <path class="pulse animatedPulseA" d="M26.4 15.4H30"/>
+        <path class="pulse animatedPulseB" d="M26.4 19H31"/>
+        <circle class="dot animatedDotA" cx="12" cy="29" r="1.15"/>
+        <circle class="dot animatedDotB" cx="16" cy="29" r="1.15"/>
+        <circle class="dot animatedDotC" cx="20" cy="29" r="1.15"/>
+      </svg>
+    </g>
+    <text x="70" y="42" class="label">思考中</text>
+    <path d="M976 31L982 37L988 31" stroke="#7C8597" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <g transform="translate(72 260)">
+    <text x="0" y="-20" class="hint">思考完成，可展开查看</text>
+    <rect x="0" y="0" width="1016" height="72" rx="12" class="panel"/>
+    <rect x="1" y="1" width="1014" height="70" rx="11" class="panelSoft"/>
+    <g transform="translate(22 20)">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <circle class="robotGlow" cx="16" cy="17" r="12"/>
+        <path class="antennaLine" d="M16 9V5.8"/>
+        <circle class="signalDone" cx="16" cy="4.5" r="2.6"/>
+        <rect class="robotHeadDone" x="6.5" y="10" width="19" height="15" rx="6.5"/>
+        <rect class="faceShine" x="8.2" y="11.4" width="15.6" height="4.8" rx="2.4"/>
+        <circle class="eye" cx="12.4" cy="17.2" r="2"/>
+        <circle class="eye" cx="19.6" cy="17.2" r="2"/>
+        <path class="mouth" d="M13.4 21.1H18.6" stroke="rgba(234,255,240,0.92)" stroke-width="1.8" stroke-linecap="round"/>
+      </svg>
+    </g>
+    <text x="70" y="42" class="label">思考过程</text>
+    <path d="M976 31L982 37L988 31" stroke="#7C8597" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <g transform="translate(72 382)">
+    <path class="divider" d="M0 0H1016"/>
+    <text x="0" y="34" class="body">视觉重点：图案比之前的 CSS 拼块更干净，动效只在“思考中”出现，完成后保持静态。</text>
+    <text x="0" y="64" class="hint">如果你觉得还是偏丑，下一步最值得调的是头部比例、眼睛大小、天线位置和颜色饱和度。</text>
+  </g>
+</svg>

@@ -9,6 +9,7 @@ use xuflow_core::agent::loop_::AgentLoop;
 use xuflow_core::agent::types::{ApprovalHandler, DenyAllHandler};
 use xuflow_core::backends::{
     deepseek::DeepSeekBackend,
+    kimi::KimiBackend,
     openai_compat::OpenAICompatBackend,
     volcengine::VolcEngineBackend,
     LlmBackend, StreamEvent,
@@ -51,6 +52,21 @@ impl VolcEngine {
     pub fn new(model: String, api_key: String, base_url: Option<String>) -> Self {
         Self {
             inner: Arc::new(VolcEngineBackend::new(model, api_key, base_url)),
+        }
+    }
+}
+
+#[napi]
+pub struct Kimi {
+    inner: Arc<dyn LlmBackend>,
+}
+
+#[napi]
+impl Kimi {
+    #[napi(constructor)]
+    pub fn new(model: String, api_key: String, base_url: Option<String>) -> Self {
+        Self {
+            inner: Arc::new(KimiBackend::new(model, api_key, base_url)),
         }
     }
 }
@@ -228,6 +244,13 @@ impl JsBackend {
 
     #[napi(factory)]
     pub fn from_volcengine(backend: &VolcEngine) -> Self {
+        Self {
+            inner: backend.inner.clone(),
+        }
+    }
+
+    #[napi(factory)]
+    pub fn from_kimi(backend: &Kimi) -> Self {
         Self {
             inner: backend.inner.clone(),
         }

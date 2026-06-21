@@ -19,6 +19,12 @@ const creatingConvProjectId = ref<string | null>(null);
 const newConvTitle = ref("");
 const scrollRef = ref<InstanceType<typeof NScrollbar> | null>(null);
 
+// 重命名状态：项目名和会话名内联编辑
+const renamingProjectId = ref<string | null>(null);
+const renameProjectName = ref("");
+const renamingConvInfo = ref<{ projectId: string; convId: string } | null>(null);
+const renameConvTitle = ref("");
+
 /** Format a timestamp as a short relative label in Chinese. */
 function formatRelativeTime(ts: number): string {
   const diff = Date.now() - ts;
@@ -73,6 +79,58 @@ function finishCreateProject() {
 function cancelCreateProject() {
   creatingProject.value = false;
   newProjectName.value = "";
+}
+
+// ── 项目名重命名（双击触发内联编辑）────────────────────────────
+// 进入编辑模式前先提交另一个类型的编辑，保证最多一个输入框活跃
+
+function startRenameProject(projectId: string) {
+  if (renamingProjectId.value) finishRenameProject();
+  if (renamingConvInfo.value) finishRenameConversation();
+  const project = store.projects.find((p) => p.id === projectId);
+  if (!project) return;
+  renamingProjectId.value = projectId;
+  renameProjectName.value = project.name;
+}
+
+function finishRenameProject() {
+  const id = renamingProjectId.value;
+  if (!id) return;
+  const name = renameProjectName.value.trim();
+  if (name) store.updateProjectName(id, name);
+  renamingProjectId.value = null;
+  renameProjectName.value = "";
+}
+
+function cancelRenameProject() {
+  renamingProjectId.value = null;
+  renameProjectName.value = "";
+}
+
+// ── 会话名重命名（双击触发内联编辑）────────────────────────────
+
+function startRenameConversation(projectId: string, convId: string) {
+  if (renamingProjectId.value) finishRenameProject();
+  if (renamingConvInfo.value) finishRenameConversation();
+  const project = store.projects.find((p) => p.id === projectId);
+  const conv = project?.conversations.find((c) => c.id === convId);
+  if (!conv) return;
+  renamingConvInfo.value = { projectId, convId };
+  renameConvTitle.value = conv.title;
+}
+
+function finishRenameConversation() {
+  const info = renamingConvInfo.value;
+  if (!info) return;
+  const title = renameConvTitle.value.trim();
+  if (title) store.updateConversationTitle(info.projectId, info.convId, title, "manual");
+  renamingConvInfo.value = null;
+  renameConvTitle.value = "";
+}
+
+function cancelRenameConversation() {
+  renamingConvInfo.value = null;
+  renameConvTitle.value = "";
 }
 
 const projectActionOptions = [
@@ -258,7 +316,23 @@ function handleNewConversation() {
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" class="project-icon">
               <path d="M2 4.5A1.5 1.5 0 013.5 3h2.672a1.5 1.5 0 011.06.44l.768.768a1.5 1.5 0 001.06.44H12.5A1.5 1.5 0 0114 6.148V12.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 12.5V4.5z" stroke="currentColor" stroke-width="1.25" fill="none"/>
             </svg>
-            <span class="project-name">{{ project.name }}</span>
+            <!-- 项目名：双击进入内联重命名，Enter/blur 确认，Escape 取消 -->
+            <span
+              v-if="renamingProjectId !== project.id"
+              class="project-name"
+              @dblclick.stop="startRenameProject(project.id)"
+              title="双击重命名"
+            >{{ project.name }}</span>
+            <NInput
+              v-else
+              v-model:value="renameProjectName"
+              size="small"
+              :autofocus="true"
+              placeholder="项目名称"
+              @keydown.enter="finishRenameProject"
+              @keydown.escape="cancelRenameProject"
+              @blur="finishRenameProject"
+            />
             <NButton
               v-show="isExpanded(project.id)"
               size="tiny"
@@ -307,7 +381,23 @@ function handleNewConversation() {
               <svg width="15" height="15" viewBox="0 0 15 15" fill="none" class="conv-icon">
                 <path d="M2.5 3.5a1 1 0 011-1h8a1 1 0 011 1v5.5a1 1 0 01-1 1H7.5L5 12.5V10H3.5a1 1 0 01-1-1v-5.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
               </svg>
-              <span class="conv-title">{{ conv.title }}</span>
+              <!-- 会话名：双击进入内联重命名，Enter/blur 确认，Escape 取消 -->
+              <span
+                v-if="!renamingConvInfo || renamingConvInfo.convId !== conv.id"
+                class="conv-title"
+                @dblclick.stop="startRenameConversation(project.id, conv.id)"
+                title="双击重命名"
+              >{{ conv.title }}</span>
+              <NInput
+                v-else
+                v-model:value="renameConvTitle"
+                size="small"
+                :autofocus="true"
+                placeholder="会话名称"
+                @keydown.enter="finishRenameConversation"
+                @keydown.escape="cancelRenameConversation"
+                @blur="finishRenameConversation"
+              />
               <span class="conv-time">{{ formatRelativeTime(conv.updatedAt) }}</span>
               <NButton
                 size="tiny"

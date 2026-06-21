@@ -1,6 +1,9 @@
 <script setup lang="ts">
-import { NCard, NForm, NFormItem, NInput, NButton, NText, NSlider } from "naive-ui";
+import { NCard, NForm, NFormItem, NInput, NInputNumber, NButton, NText, NSlider } from "naive-ui";
 import { ref, watch, onBeforeUnmount, computed } from "vue";
+import { useProjectStore } from "../../stores/project";
+import { loadDbConfig, saveDbConfig } from "../../stores/config";
+import { invoke } from "@tauri-apps/api/core";
 import { useConfigStore, ALL_MODELS, type TokenEstimateConfig } from "../../stores/config";
 import { useAgentStore } from "../../stores/agent";
 import { useThemeStore } from "../../stores/theme";
@@ -80,6 +83,107 @@ const ctxWinHandler = (m: string) => (v: number | null) => handleContextWindowCh
 const cjkHandler    = (m: string) => (v: number | null) => handleCjkCoeffChange(m, v);
 const nonCjkHandler = (m: string) => (v: number | null) => handleNonCjkCoeffChange(m, v);
 const structHandler = (m: string) => (v: number | null) => handleStructuredCoeffChange(m, v);
+
+  // ── 数据库连接配置 ──────────────────────────────────────
+
+  const projectStore = useProjectStore();
+
+  const savedDbConfig = loadDbConfig();
+  const dbHost = ref(savedDbConfig?.host ?? "127.0.0.1");
+  const dbPort = ref(savedDbConfig?.port ?? 3306);
+  const dbUser = ref(savedDbConfig?.user ?? "root");
+  const dbPassword = ref(savedDbConfig?.password ?? "");
+  const dbName = ref(savedDbConfig?.database ?? "xuflow");
+
+  const dbConnecting = ref(false);
+  const dbTestOk = ref(false);
+  const dbTestFail = ref(false);
+  const dbConnected = ref(false);
+
+  async function checkDbStatus() {
+    try {
+      const ok = await invoke<boolean>("db_is_connected");
+      dbConnected.value = ok;
+      if (ok) {
+        projectStore.dbConnected = true;
+        store.loadFromMySql();
+      }
+    } catch {
+      dbConnected.value = false;
+    }
+  }
+
+  async function testConnection() {
+    dbConnecting.value = true;
+    dbTestOk.value = false;
+    dbTestFail.value = false;
+    try {
+      await invoke("db_test_connection", {
+        opts: {
+          host: dbHost.value,
+          port: dbPort.value,
+          user: dbUser.value,
+          password: dbPassword.value,
+          database: dbName.value,
+        }
+      });
+      dbTestOk.value = true;
+    } catch (e: any) {
+      dbTestFail.value = true;
+      console.error("[settings] DB test failed:", e);
+    } finally {
+      dbConnecting.value = false;
+    }
+  }
+
+  async function saveAndConnect() {
+    dbConnecting.value = true;
+    dbTestOk.value = false;
+    dbTestFail.value = false;
+    saveDbConfig({
+      host: dbHost.value,
+      port: dbPort.value,
+      user: dbUser.value,
+      password: dbPassword.value,
+      database: dbName.value,
+    });
+    try {
+      await invoke("db_connect", {
+        opts: {
+          host: dbHost.value,
+          port: dbPort.value,
+          user: dbUser.value,
+          password: dbPassword.value,
+          database: dbName.value,
+        }
+      });
+      dbConnected.value = true;
+      dbTestOk.value = true;
+      projectStore.dbConnected = true;
+      await projectStore.tryLoadFromMySql();
+      await store.loadFromMySql();
+      try {
+        const isMigrated = await invoke<boolean>("db_is_migrated");
+        if (!isMigrated) {
+          const raw = localStorage.getItem("xuflow-projects");
+          if (raw) {
+            const count = await invoke<number>("db_migrate_from_localstorage", { frontendProjectsJson: raw });
+            console.log("[settings] Migrated", count, "messages from localStorage to MySQL");
+          }
+        }
+      } catch (e) {
+        console.error("[settings] Migration check failed:", e);
+      }
+    } catch (e: any) {
+      dbTestFail.value = true;
+      dbConnected.value = false;
+      console.error("[settings] DB connect failed:", e);
+    } finally {
+      dbConnecting.value = false;
+    }
+  }
+
+  checkDbStatus();
 
 // Push context window changes to Rust backend via Tauri
 watch(
@@ -257,11 +361,14 @@ watch(
     <!-- API 密钥 -->
     <div v-if="props.activeSection === 'api-keys'" class="section">
       <h2 class="section-title">API 密钥</h2>
-      <p class="section-desc">管理你的 DeepSeek 与火山引擎 API 密钥，以及当前使用的模型。</p>
+      <p class="section-desc">管理你的 DeepSeek、Kimi 与火山引擎 API 密钥，以及当前使用的模型。</p>
       <NCard class="settings-card">
         <NForm label-placement="left" label-width="100">
           <NFormItem label="DeepSeek Key">
             <NInput v-model:value="store.deepseekApiKey" type="password" placeholder="输入 DeepSeek API Key" show-password-on="click" />
+          </NFormItem>
+          <NFormItem label="Kimi Key">
+            <NInput v-model:value="store.kimiApiKey" type="password" placeholder="输入 Kimi (月之暗面) API Key" show-password-on="click" />
           </NFormItem>
           <NFormItem label="火山引擎 Key">
             <NInput v-model:value="store.volcengineApiKey" type="password" placeholder="输入火山引擎 API Key" show-password-on="click" />
@@ -442,6 +549,79 @@ watch(
       </NCard>
     </div>
 
+
+    <!-- 数据库 -->
+    <div v-if="props.activeSection === 'database'" class="section">
+      <h2 class="section-title">数据库</h2>
+      <p class="section-desc">配置 MySQL 连接，替代默认的浏览器本地存储。数据和对话将持久化到指定数据库。</p>
+
+      <!-- 连接配置 -->
+      <NCard class="settings-card" style="margin-bottom: 20px">
+        <template #header>
+          <div class="card-header">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <ellipse cx="10" cy="5" rx="8" ry="3" stroke="currentColor" stroke-width="1.6" />
+              <path d="M2 5v10c0 1.66 3.58 3 8 3s8-1.34 8-3V5" stroke="currentColor" stroke-width="1.6" />
+              <path d="M2 10c0 1.66 3.58 3 8 3s8-1.34 8-3" stroke="currentColor" stroke-width="1.2" />
+            </svg>
+            <span>MySQL 连接配置</span>
+            <span class="db-status" :style="{ color: dbConnected ? '#22c55e' : '#9ca3af' }">
+              {{ dbConnected ? '● 已连接' : '○ 未连接' }}
+            </span>
+          </div>
+        </template>
+        <NForm label-placement="left" label-width="80" size="small">
+          <NFormItem label="主机地址">
+            <NInput v-model:value="dbHost" placeholder="127.0.0.1" />
+          </NFormItem>
+          <NFormItem label="端口">
+            <NInputNumber v-model:value="dbPort" :min="1" :max="65535" style="width: 100%" />
+          </NFormItem>
+          <NFormItem label="用户名">
+            <NInput v-model:value="dbUser" placeholder="root" />
+          </NFormItem>
+          <NFormItem label="密码">
+            <NInput v-model:value="dbPassword" type="password" placeholder="MySQL 密码" show-password-on="click" />
+          </NFormItem>
+          <NFormItem label="数据库名">
+            <NInput v-model:value="dbName" placeholder="xuflow" />
+          </NFormItem>
+          <NFormItem>
+            <div style="display: flex; gap: 8px;">
+              <NButton @click="testConnection" :loading="dbConnecting" secondary>
+                测试连接
+              </NButton>
+              <NButton @click="saveAndConnect" :loading="dbConnecting" type="primary">
+                保存并连接
+              </NButton>
+              <NText v-if="dbTestOk" type="success" style="align-self: center; font-size: 13px;">✓ 连接成功</NText>
+              <NText v-if="dbTestFail" type="error" style="align-self: center; font-size: 13px;">✗ 连接失败</NText>
+            </div>
+          </NFormItem>
+        </NForm>
+      </NCard>
+
+      <!-- 使用说明 -->
+      <NCard class="settings-card">
+        <template #header>
+          <div class="card-header">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.6" />
+              <path d="M10 9v5M10 6v1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+            </svg>
+            <span>使用说明</span>
+          </div>
+        </template>
+        <div class="about-content">
+          <p>1. 确保 MySQL 服务已启动并创建了对应数据库。</p>
+          <p>2. 执行建库 SQL：<code>CREATE DATABASE xuflow CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;</code></p>
+          <p>3. 填写连接信息后点击「保存并连接」，系统自动创建所需表结构。</p>
+          <p>4. 连接成功后，所有项目和会话数据将写入 MySQL，原有 localStorage 数据自动迁移。</p>
+        </div>
+      </NCard>
+    </div>
+
+
     <!-- 关于 -->
     <div v-if="props.activeSection === 'about'" class="section">
       <h2 class="section-title">关于</h2>
@@ -453,6 +633,12 @@ watch(
               <path d="M10 18V6M6 10l4-4 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
               <path d="M3 3h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
             </svg>
+/* 数据库状态指示 */
+.db-status {
+  font-size: 12px;
+  font-weight: 500;
+  margin-left: auto;
+}
             <span>版本信息</span>
           </div>
         </template>

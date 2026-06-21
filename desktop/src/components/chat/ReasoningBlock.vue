@@ -5,7 +5,7 @@ import { useThemeStore } from "../../stores/theme";
 const props = defineProps<{
   reasoning?: string;
   reasoningDone?: boolean;
-  modelValue?: boolean; // expanded state (v-model)
+  modelValue?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -15,18 +15,34 @@ const emit = defineEmits<{
 const themeStore = useThemeStore();
 
 const isExpanded = computed({
-  get: () => props.modelValue ?? false,
-  set: (v) => emit("update:modelValue", v),
+  get: () => props.modelValue ?? true,
+  set: (value) => emit("update:modelValue", value),
 });
 
+/**
+ * 判断思考内容是否仍在持续流式输出。
+ * 当存在思考文本且尚未收到结束信号时保持动态思考态。
+ */
 const isStreaming = computed(() => {
-  // Streaming if we have reasoning content but it's not marked done yet
   return !!props.reasoning && props.reasoningDone !== true;
 });
 
+/**
+ * 判断思考过程是否已经结束。
+ * 仅在收到完成标记后切换为静态查看入口。
+ */
 const isDone = computed(() => props.reasoningDone === true);
+
+/**
+ * 判断当前是否存在可展示的思考内容。
+ * 通过思考文本是否为空决定是否允许展开查看。
+ */
 const hasContent = computed(() => !!props.reasoning && props.reasoning.length > 0);
 
+/**
+ * 切换思考内容面板的展开状态。
+ * 仅在存在思考文本时响应点击并展开或收起详情。
+ */
 function toggle() {
   if (!hasContent.value) return;
   isExpanded.value = !isExpanded.value;
@@ -36,52 +52,26 @@ function toggle() {
 <template>
   <div
     v-if="hasContent || isStreaming"
-    class="reasoning-block"
+    class="reasoning-section"
     :class="{ dark: themeStore.isDark, expanded: isExpanded }"
   >
-    <!-- Collapsed header: clickable toggle -->
     <button
-      class="reasoning-header"
+      class="reasoning-status-button"
       :class="{ clickable: hasContent }"
-      @click="toggle"
+      type="button"
       :disabled="!hasContent"
+      @click="toggle"
     >
-      <!-- Streaming state: animated dots + 思考中... -->
-      <template v-if="isStreaming">
-        <span class="reasoning-icon spinning">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
-          </svg>
-        </span>
-        <span class="reasoning-label">思考中</span>
-        <span class="thinking-dots">
-          <span class="dot"></span>
-          <span class="dot"></span>
-          <span class="dot"></span>
-        </span>
-      </template>
-
-      <!-- Done state: click to view -->
-      <template v-else-if="isDone">
-        <span class="reasoning-icon done">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="20 6 9 17 4 12"/>
-          </svg>
-        </span>
-        <span class="reasoning-label">Done</span>
-        <span v-if="!isExpanded" class="reasoning-hint">, click to view...</span>
-        <span v-else class="reasoning-hint">, click to collapse</span>
-      </template>
-
-      <!-- Expand/collapse chevron -->
+      <span class="reasoning-label">
+        {{ isDone ? "思考已完成" : "思考中..." }}
+      </span>
       <span v-if="hasContent" class="reasoning-chevron" :class="{ up: isExpanded }">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="6 9 12 15 18 9"/>
+          <polyline points="6 9 12 15 18 9" />
         </svg>
       </span>
     </button>
 
-    <!-- Expanded content -->
     <div v-if="isExpanded && hasContent" class="reasoning-content">
       <pre class="reasoning-text">{{ reasoning }}</pre>
     </div>
@@ -89,203 +79,97 @@ function toggle() {
 </template>
 
 <style scoped>
-.reasoning-block {
+.reasoning-section {
   display: flex;
   flex-direction: column;
-  margin: 8px 0 12px;
-  border-radius: 10px;
-  overflow: hidden;
-  border: 1px solid rgba(128, 128, 128, 0.12);
-  background: rgba(128, 128, 128, 0.04);
-  transition: border-color 0.2s ease, background 0.2s ease;
+  gap: 6px;
+  margin: 0;
 }
 
-.reasoning-block.dark {
-  border-color: rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.reasoning-block.expanded {
-  border-color: rgba(128, 128, 128, 0.18);
-}
-
-.reasoning-block.dark.expanded {
-  border-color: rgba(255, 255, 255, 0.1);
-}
-
-/* ── Header ── */
-.reasoning-header {
-  display: flex;
+.reasoning-status-button {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
+  gap: 6px;
+  width: fit-content;
+  min-height: 36px;
+  padding: 0;
   border: none;
   background: transparent;
-  font-size: 13px;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-  color: #888;
-  cursor: default;
-  width: 100%;
+  color: #9ca3af;
+  font-size: 14px;
+  line-height: 1.6;
+  font-weight: 520;
   text-align: left;
-  transition: color 0.15s ease, background 0.15s ease;
+  cursor: default;
+  transition: color 0.15s ease;
 }
 
-.reasoning-header.clickable {
+.reasoning-status-button.clickable {
   cursor: pointer;
 }
 
-.reasoning-header.clickable:hover {
-  background: rgba(128, 128, 128, 0.06);
-  color: #aaa;
-}
-
-.reasoning-block.dark .reasoning-header {
-  color: #9ca3af;
-}
-
-.reasoning-block.dark .reasoning-header.clickable:hover {
-  background: rgba(255, 255, 255, 0.04);
+.reasoning-status-button.clickable:hover {
   color: #d1d5db;
 }
 
-/* ── Icon ── */
-.reasoning-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  color: #a0a0a0;
-}
-
-.reasoning-icon.done {
-  color: #22c55e;
-}
-
-.reasoning-block.dark .reasoning-icon {
-  color: #6b7280;
-}
-
-.reasoning-block.dark .reasoning-icon.done {
-  color: #34d399;
-}
-
-.spinning {
-  animation: spin 2s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-/* ── Label ── */
 .reasoning-label {
-  font-weight: 500;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
-/* ── Thinking dots ── */
-.thinking-dots {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-}
-
-.thinking-dots .dot {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: #a0a0a0;
-  animation: thinkingBlink 1.4s infinite both;
-}
-
-.reasoning-block.dark .thinking-dots .dot {
-  background: #6b7280;
-}
-
-.thinking-dots .dot:nth-child(2) {
-  animation-delay: 0.2s;
-}
-
-.thinking-dots .dot:nth-child(3) {
-  animation-delay: 0.4s;
-}
-
-@keyframes thinkingBlink {
-  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
-  40% { opacity: 1; transform: scale(1); }
-}
-
-/* ── Hint text ── */
-.reasoning-hint {
-  opacity: 0.7;
-  font-weight: 400;
-}
-
-/* ── Chevron ── */
 .reasoning-chevron {
-  margin-left: auto;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  color: #6b7280;
   transition: transform 0.2s ease;
-  color: #888;
 }
 
 .reasoning-chevron.up {
   transform: rotate(180deg);
 }
 
-.reasoning-block.dark .reasoning-chevron {
-  color: #6b7280;
-}
-
-/* ── Expanded content ── */
 .reasoning-content {
-  padding: 0 14px 12px;
+  padding: 0;
   animation: reasoningFadeIn 0.2s ease;
-}
-
-@keyframes reasoningFadeIn {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: translateY(0); }
 }
 
 .reasoning-text {
   margin: 0;
-  padding: 10px 14px;
-  background: rgba(0, 0, 0, 0.04);
-  border-radius: 8px;
+  padding: 0;
+  background: transparent;
   font-family: "SF Mono", "Fira Code", "Cascadia Code", "JetBrains Mono", monospace;
   font-size: 12.5px;
   line-height: 1.7;
-  color: #6b7280;
+  color: #d6dce8;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 400px;
-  overflow-y: auto;
+  overflow: visible;
 }
 
-.reasoning-block.dark .reasoning-text {
-  background: rgba(255, 255, 255, 0.04);
+.dark .reasoning-status-button {
   color: #9ca3af;
 }
 
-/* Scrollbar styling for reasoning text */
-.reasoning-text::-webkit-scrollbar {
-  width: 6px;
+.dark .reasoning-status-button.clickable:hover {
+  color: #d1d5db;
 }
 
-.reasoning-text::-webkit-scrollbar-track {
-  background: transparent;
+.dark .reasoning-chevron {
+  color: #6b7280;
 }
 
-.reasoning-text::-webkit-scrollbar-thumb {
-  background: rgba(128, 128, 128, 0.2);
-  border-radius: 3px;
+.dark .reasoning-text {
+  color: #d6dce8;
 }
 
-.reasoning-text::-webkit-scrollbar-thumb:hover {
-  background: rgba(128, 128, 128, 0.3);
+@keyframes reasoningFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 </style>

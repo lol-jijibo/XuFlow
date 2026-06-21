@@ -3,7 +3,7 @@ import { ref, computed, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { SelectOption, SelectGroupOption } from "naive-ui";
 
-export type Provider = "deepseek" | "volcengine";
+export type Provider = "deepseek" | "volcengine" | "kimi";
 
 export interface TokenEstimateConfig {
   cjkCoeff: number;        // CJK 字符系数，默认 1.3
@@ -28,6 +28,11 @@ export const ALL_MODELS: ModelOption[] = [
   { label: "DeepSeek-V4-flash", value: "deepseek-v4-flash", provider: "deepseek", apiModelId: "deepseek-v4-flash" },
   { label: "DeepSeek-V4-pro",   value: "deepseek-v4-pro",   provider: "deepseek", apiModelId: "deepseek-v4-pro" },
   { label: "DeepSeek-V3.2",     value: "deepseek-v3.2",     provider: "deepseek", apiModelId: "deepseek-v3.2" },
+
+  // ── Kimi (月之暗面 / Moonshot AI) ──
+  { label: "Kimi-K2.7-Code", value: "kimi-k2.7-code", provider: "kimi", apiModelId: "kimi-k2.7-code", contextWindow: 256_000 },
+  { label: "Kimi-K2.6",      value: "kimi-k2.6",      provider: "kimi", apiModelId: "kimi-k2.6",      contextWindow: 256_000 },
+  { label: "Kimi-K2.5",      value: "kimi-k2.5",      provider: "kimi", apiModelId: "kimi-k2.5",      contextWindow: 256_000 },
 
   // ── 火山引擎 · DeepSeek 系列 （填入你的接入点 ID）──
   { label: "DeepSeek-V4-flash", value: "volc-deepseek-v4-flash", provider: "volcengine", apiModelId: "ep-xxxxxxxxxxxx" },
@@ -57,11 +62,40 @@ function getModelDisplayName(modelId: string): string {
 }
 
 const CONFIG_STORAGE_KEY = "xuflow-config";
+const DB_CONFIG_KEY = "xuflow-db-config";
+
+/** MySQL 连接信息（仅存 localStorage，因为连上数据库前就要读取）。 */
+export interface DbConnectConfig {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+}
+
+export function loadDbConfig(): DbConnectConfig | null {
+  try {
+    const raw = localStorage.getItem(DB_CONFIG_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.error("[config] Failed to load db config:", e);
+  }
+  return null;
+}
+
+export function saveDbConfig(config: DbConnectConfig) {
+  try {
+    localStorage.setItem(DB_CONFIG_KEY, JSON.stringify(config));
+  } catch (e) {
+    console.error("[config] Failed to save db config:", e);
+  }
+}
 
 function loadConfig(): {
   activeModelId: string;
   deepseekApiKey: string;
   volcengineApiKey: string;
+  kimiApiKey: string;
   modelEndpoints: Record<string, string>;
   contextWindows: Record<string, number>;
   minUserTurns: number;
@@ -75,6 +109,7 @@ function loadConfig(): {
         activeModelId: data.activeModelId ?? "volc-deepseek-v4-pro",
         deepseekApiKey: data.deepseekApiKey ?? "",
         volcengineApiKey: data.volcengineApiKey ?? "",
+        kimiApiKey: data.kimiApiKey ?? "",
         modelEndpoints: data.modelEndpoints ?? {},
         contextWindows: data.contextWindows ?? {},
         minUserTurns: data.minUserTurns ?? 3,
@@ -88,6 +123,7 @@ function loadConfig(): {
     activeModelId: "volc-deepseek-v4-pro",
     deepseekApiKey: "",
     volcengineApiKey: "",
+    kimiApiKey: "",
     modelEndpoints: {},
     contextWindows: {},
     minUserTurns: 3,
@@ -99,6 +135,7 @@ function saveConfig(state: {
   activeModelId: string;
   deepseekApiKey: string;
   volcengineApiKey: string;
+  kimiApiKey: string;
   modelEndpoints: Record<string, string>;
   contextWindows: Record<string, number>;
   minUserTurns: number;
@@ -116,6 +153,7 @@ export const useConfigStore = defineStore("config", () => {
   const activeModelId = ref(saved.activeModelId);
   const deepseekApiKey = ref(saved.deepseekApiKey);
   const volcengineApiKey = ref(saved.volcengineApiKey);
+  const kimiApiKey = ref(saved.kimiApiKey);
 
   /** 每个模型的接入点 ID 映射 (value → endpoint ID)，覆盖 ALL_MODELS 里的默认值 */
   const modelEndpoints = ref<Record<string, string>>(saved.modelEndpoints);
@@ -126,25 +164,60 @@ export const useConfigStore = defineStore("config", () => {
   const minUserTurns = ref<number>(saved.minUserTurns);
   /** Per-model token estimation coefficient overrides (modelValue → config) */
   const tokenEstimateConfigs = ref<Record<string, TokenEstimateConfig>>(saved.tokenEstimateConfigs);
+  const dbConnected = ref(false);
+  function setDbConnected(v: boolean) { dbConnected.value = v; }
+
 
   function persist() {
-    saveConfig({
+    const state = {
       activeModelId: activeModelId.value,
       deepseekApiKey: deepseekApiKey.value,
       volcengineApiKey: volcengineApiKey.value,
+      kimiApiKey: kimiApiKey.value,
       modelEndpoints: modelEndpoints.value,
       contextWindows: contextWindows.value,
       minUserTurns: minUserTurns.value,
       tokenEstimateConfigs: tokenEstimateConfigs.value,
-    });
+    };
+    saveConfig(state);
+    if (dbConnected.value) {
+      invoke("db_set_config", { key: CONFIG_STORAGE_KEY, value: JSON.stringify(state) })
+        .catch((e) => console.error("[config] db_set_config failed:", e));
+    }
   }
 
-  /** Initialize API keys from system environment variables (DEEP_SEEK_API_KEY, ARK_API_KEY).
+  /** 从 MySQL 加载配置并合并到当前状态（MySQL 优先，localStorage 回退）。 */
+  async function loadFromMySql(): Promise<boolean> {
+    try {
+      const connected = await invoke<boolean>("db_is_connected").catch(() => false);
+      if (!connected) return false;
+      const json = await invoke<string | null>("db_get_config", { key: CONFIG_STORAGE_KEY }).catch(() => null);
+      if (!json) return false;
+      const data = JSON.parse(json);
+      activeModelId.value = data.activeModelId ?? activeModelId.value;
+      if (data.deepseekApiKey) deepseekApiKey.value = data.deepseekApiKey;
+      if (data.volcengineApiKey) volcengineApiKey.value = data.volcengineApiKey;
+      if (data.kimiApiKey) kimiApiKey.value = data.kimiApiKey;
+      if (data.modelEndpoints) modelEndpoints.value = { ...modelEndpoints.value, ...data.modelEndpoints };
+      if (data.contextWindows) contextWindows.value = { ...contextWindows.value, ...data.contextWindows };
+      if (data.minUserTurns != null) minUserTurns.value = data.minUserTurns;
+      if (data.tokenEstimateConfigs) tokenEstimateConfigs.value = { ...tokenEstimateConfigs.value, ...data.tokenEstimateConfigs };
+      dbConnected.value = true;
+      console.log("[config] Loaded from MySQL");
+      return true;
+    } catch (e) {
+      console.error("[config] Failed to load from MySQL:", e);
+      return false;
+    }
+  }
+
+
+  /** Initialize API keys from system environment variables (DEEP_SEEK_API_KEY, ARK_API_KEY, KIMI_API_KEY).
    *  Only fills in keys that are currently empty — never overwrites user-saved values.
    *  Call once on app startup. Safe to call multiple times. */
   async function initFromEnv() {
     try {
-      const env = await invoke<{ deepseek_api_key: string; ark_api_key: string }>("get_env_api_keys");
+      const env = await invoke<{ deepseek_api_key: string; ark_api_key: string; kimi_api_key: string }>("get_env_api_keys");
       // Only set if the ref is still empty (env acts as first-launch fallback)
       if (!deepseekApiKey.value && env.deepseek_api_key) {
         deepseekApiKey.value = env.deepseek_api_key;
@@ -153,6 +226,10 @@ export const useConfigStore = defineStore("config", () => {
       if (!volcengineApiKey.value && env.ark_api_key) {
         volcengineApiKey.value = env.ark_api_key;
         console.log("[config] Loaded ARK_API_KEY from environment");
+      }
+      if (!kimiApiKey.value && env.kimi_api_key) {
+        kimiApiKey.value = env.kimi_api_key;
+        console.log("[config] Loaded KIMI_API_KEY from environment");
       }
       persist();
     } catch (e) {
@@ -167,9 +244,14 @@ export const useConfigStore = defineStore("config", () => {
   );
 
   /** API key for the currently active provider */
-  const activeApiKey = computed<string>(() =>
-    activeProvider.value === "deepseek" ? deepseekApiKey.value : volcengineApiKey.value
-  );
+  const activeApiKey = computed<string>(() => {
+    switch (activeProvider.value) {
+      case "deepseek": return deepseekApiKey.value;
+      case "volcengine": return volcengineApiKey.value;
+      case "kimi": return kimiApiKey.value;
+      default: return "";
+    }
+  });
 
   /** 显示用的模型名称 */
   const activeModelName = computed<string>(() =>
@@ -246,6 +328,14 @@ export const useConfigStore = defineStore("config", () => {
     },
     {
       type: "group",
+      label: "Kimi (月之暗面)",
+      key: "kimi",
+      children: ALL_MODELS
+        .filter((m) => m.provider === "kimi")
+        .map((m) => ({ label: m.label, value: m.value })),
+    },
+    {
+      type: "group",
       label: "火山引擎 · DeepSeek 系列",
       key: "volc-deepseek",
       children: ALL_MODELS
@@ -285,7 +375,10 @@ export const useConfigStore = defineStore("config", () => {
     persist();
   }
 
-  function setModelEndpoint(modelValue: string, endpointId: string) {
+  function setKimiApiKey(key: string) {
+    kimiApiKey.value = key;
+    persist();
+  }  function setModelEndpoint(modelValue: string, endpointId: string) {
     modelEndpoints.value = { ...modelEndpoints.value, [modelValue]: endpointId };
     persist();
   }
@@ -295,7 +388,7 @@ export const useConfigStore = defineStore("config", () => {
   }
 
   // Auto-persist whenever any key config value changes (handles v-model, direct ref mutation, etc.)
-  watch([activeModelId, deepseekApiKey, volcengineApiKey, modelEndpoints, contextWindows, minUserTurns, tokenEstimateConfigs], () => {
+  watch([activeModelId, deepseekApiKey, volcengineApiKey, kimiApiKey, modelEndpoints, contextWindows, minUserTurns, tokenEstimateConfigs], () => {
     persist();
   }, { deep: true });
 
@@ -303,6 +396,7 @@ export const useConfigStore = defineStore("config", () => {
     activeModelId,
     deepseekApiKey,
     volcengineApiKey,
+    kimiApiKey,
     modelEndpoints,
     activeProvider,
     activeApiKey,
@@ -313,11 +407,15 @@ export const useConfigStore = defineStore("config", () => {
     setActiveModelId,
     setDeepseekApiKey,
     setVolcengineApiKey,
+    setKimiApiKey,
     setModelEndpoint,
     getModelEndpoint,
     getProviderForModel,
     getModelDisplayName,
     initFromEnv,
+    dbConnected,
+    setDbConnected,
+    loadFromMySql,
     // Context management
     contextWindows,
     minUserTurns,

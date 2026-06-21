@@ -43,11 +43,18 @@ const contextIcon = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none"
   <path d="M6 8h8M6 11h5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
 </svg>`;
 
+const databaseIcon = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+  <ellipse cx="10" cy="5" rx="8" ry="3" stroke="currentColor" stroke-width="1.6"/>
+  <path d="M2 5v10c0 1.66 3.58 3 8 3s8-1.34 8-3V5" stroke="currentColor" stroke-width="1.6"/>
+  <path d="M2 10c0 1.66 3.58 3 8 3s8-1.34 8-3" stroke="currentColor" stroke-width="1.2"/>
+</svg>`;
+
 const menuOptions: MenuOption[] = [
   { label: "外观", key: "appearance", icon: renderIcon(appearanceIcon) },
   { label: "API 密钥", key: "api-keys", icon: renderIcon(keyIcon) },
   { label: "上下文管理", key: "context", icon: renderIcon(contextIcon) },
   { label: "接入点管理", key: "endpoints", icon: renderIcon(gridIcon) },
+  { label: "数据库", key: "database", icon: renderIcon(databaseIcon) },
   { label: "关于", key: "about", icon: renderIcon(infoIcon) },
 ];
 </script>

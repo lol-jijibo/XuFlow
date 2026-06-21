@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 
 export interface ToolCallEntry {
   id: string;
@@ -24,6 +25,8 @@ export interface ChatMessage {
   reasoningExpanded?: boolean;
   /** Tool calls made during this assistant turn. Not serialized — rebuilt from events. */
   toolCalls?: ToolCallEntry[];
+  /** MySQL 行 ID（仅连接 MySQL 时赋值，localStorage 模式下无此字段）。 */
+  _dbId?: number;
 }
 
 export interface Conversation {
@@ -55,7 +58,9 @@ function uid(): string {
 
 const STORAGE_KEY = "xuflow-projects";
 
-function loadState(): { projects: Project[]; activeProjectId: string | null; activeConversationId: string | null } {
+// ── localStorage 工具函数（MySQL 未连接时的回退方案）────────
+
+function loadFromLocalStorage(): { projects: Project[]; activeProjectId: string | null; activeConversationId: string | null } {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
@@ -72,7 +77,7 @@ function loadState(): { projects: Project[]; activeProjectId: string | null; act
   return { projects: [], activeProjectId: null, activeConversationId: null };
 }
 
-function saveState(
+function saveToLocalStorage(
   projects: Project[],
   activeProjectId: string | null,
   activeConversationId: string | null
@@ -87,25 +92,120 @@ function saveState(
   }
 }
 
+// ── MySQL 数据加载 ───────────────────────────────────────────
+
+/** 从 MySQL 加载所有项目及其会话和消息，重组为前端 Project[] 结构。 */
+async function loadFromMySql(): Promise<{ projects: Project[]; activeProjectId: string | null; activeConversationId: string | null }> {
+  try {
+    // 检查是否已迁移（暂未使用，后续可做迁移提示）
+    await invoke<boolean>("db_is_migrated").catch(() => false);
+
+    // 从 MySQL 加载项目列表
+    const dbProjects = await invoke<any[]>("db_list_projects");
+
+    const projects: Project[] = [];
+    for (const p of dbProjects) {
+      // 加载该项目下的会话
+      const dbSessions = await invoke<any[]>("db_list_sessions", { projectId: p.id });
+
+      const conversations: Conversation[] = [];
+      for (const s of dbSessions) {
+        // 加载会话消息
+        const dbMessages = await invoke<any[]>("db_get_messages", { sessionId: s.id });
+
+        const messages: ChatMessage[] = dbMessages.map((m: any) => ({
+          role: m.role,
+          content: m.content,
+          done: m.done,
+          reasoning: m.reasoning ?? undefined,
+          reasoningDone: m.reasoning_done,
+          toolCalls: m.tool_calls ? JSON.parse(m.tool_calls) : undefined,
+        }));
+
+        conversations.push({
+          id: s.id,
+          title: s.title,
+          titleSource: (s.title_source as any) ?? "default",
+          visible: s.visible,
+          messages,
+          createdAt: s.created_at,
+          updatedAt: s.updated_at,
+        });
+      }
+
+      projects.push({
+        id: p.id,
+        name: p.name,
+        path: p.path ?? undefined,
+        source: (p.source as any) ?? "local",
+        conversations,
+        createdAt: p.created_at,
+        updatedAt: p.updated_at,
+      });
+    }
+
+    // 尝试从 localStorage 恢复活跃项目/会话 ID（MySQL 不存这个状态）
+    const localState = loadFromLocalStorage();
+    const activeProjectId = localState.activeProjectId ?? projects[0]?.id ?? null;
+    const activeConversationId = localState.activeConversationId
+      ?? projects[0]?.conversations.filter(c => c.visible !== false)[0]?.id
+      ?? projects[0]?.conversations[0]?.id
+      ?? null;
+
+    return { projects, activeProjectId, activeConversationId };
+  } catch (e) {
+    console.error("[project] Failed to load from MySQL:", e);
+    throw e;
+  }
+}
+
+// ── Store ───────────────────────────────────────────────────
+
 export const useProjectStore = defineStore("project", () => {
-  const saved = loadState();
+  const saved = loadFromLocalStorage();
   const projects = ref<Project[]>(saved.projects);
   const activeProjectId = ref<string | null>(saved.activeProjectId);
   const activeConversationId = ref<string | null>(saved.activeConversationId);
 
+  /** MySQL 是否已连接并完成数据加载。 */
+  const dbConnected = ref(false);
+
+  /** 是否已从 MySQL 加载过数据（防重复加载）。 */
+  let dbLoaded = false;
+
+  /** 尝试从 MySQL 加载数据。成功则替换 projects 并返回 true。 */
+  async function tryLoadFromMySql(): Promise<boolean> {
+    if (dbLoaded) return dbConnected.value;
+    dbLoaded = true;
+
+    // 检查 MySQL 连接状态
+    const connected = await invoke<boolean>("db_is_connected").catch(() => false);
+    if (!connected) return false;
+
+    try {
+      const data = await loadFromMySql();
+      projects.value = data.projects;
+      activeProjectId.value = data.activeProjectId;
+      activeConversationId.value = data.activeConversationId;
+      dbConnected.value = true;
+      console.log("[project] Loaded from MySQL:", projects.value.length, "projects");
+      return true;
+    } catch {
+      dbConnected.value = false;
+      return false;
+    }
+  }
+
   /** Validate that saved IDs still point to real objects; fall back to first available.
    *  Skips invisible conversations when picking a fallback. */
   function validateState() {
-    // Validate active project
     const project = projects.value.find((p) => p.id === activeProjectId.value);
     if (!project) {
       activeProjectId.value = projects.value[0]?.id ?? null;
     }
-    // Validate active conversation within the active project
     const activeProj = projects.value.find((p) => p.id === activeProjectId.value);
     const conv = activeProj?.conversations.find((c) => c.id === activeConversationId.value);
     if (!conv) {
-      // Fall back to first visible conversation, or any conversation if none visible
       const visibleConvs = activeProj?.conversations.filter((c) => c.visible !== false) ?? [];
       activeConversationId.value = visibleConvs[0]?.id ?? activeProj?.conversations[0]?.id ?? null;
     }
@@ -113,9 +213,10 @@ export const useProjectStore = defineStore("project", () => {
 
   validateState();
 
-  /** Persist current state to localStorage after every mutation */
+  /** 持久化：MySQL 已由各方法实时写入，此处仅回退到 localStorage。 */
   function persist() {
-    saveState(projects.value, activeProjectId.value, activeConversationId.value);
+    if (dbConnected.value) return; // MySQL 模式下不需要 localStorage
+    saveToLocalStorage(projects.value, activeProjectId.value, activeConversationId.value);
   }
 
   const activeProject = computed(() =>
@@ -132,6 +233,8 @@ export const useProjectStore = defineStore("project", () => {
     activeConversation.value?.messages ?? []
   );
 
+  // ── 项目操作 ────────────────────────────────────────────
+
   function createProject(name: string): Project {
     const project: Project = {
       id: uid(),
@@ -142,6 +245,17 @@ export const useProjectStore = defineStore("project", () => {
       updatedAt: Date.now(),
     };
     projects.value.push(project);
+
+    if (dbConnected.value) {
+      invoke("db_create_project", { name, source: "local" })
+        .then((row: any) => {
+          // 用 MySQL 返回的 id 和 timestamp 覆盖本地值
+          project.id = row.id;
+          project.createdAt = row.created_at;
+          project.updatedAt = row.updated_at;
+        })
+        .catch((e) => console.error("[project] db_create_project failed:", e));
+    }
     persist();
     return project;
   }
@@ -157,6 +271,16 @@ export const useProjectStore = defineStore("project", () => {
       updatedAt: Date.now(),
     };
     projects.value.push(project);
+
+    if (dbConnected.value) {
+      invoke("db_create_project", { name, source: "imported" })
+        .then((row: any) => {
+          project.id = row.id;
+          project.createdAt = row.created_at;
+          project.updatedAt = row.updated_at;
+        })
+        .catch((e) => console.error("[project] db_create_project failed:", e));
+    }
     persist();
     return project;
   }
@@ -170,8 +294,30 @@ export const useProjectStore = defineStore("project", () => {
       activeConversationId.value =
         projects.value[0]?.conversations[0]?.id ?? null;
     }
+
+    if (dbConnected.value) {
+      invoke("db_delete_project", { id })
+        .catch((e) => console.error("[project] db_delete_project failed:", e));
+    }
     persist();
   }
+
+  // 修改项目名称，同步更新 MySQL 和 localStorage。
+  function updateProjectName(projectId: string, name: string): boolean {
+    const project = projects.value.find((p) => p.id === projectId);
+    if (!project) return false;
+    project.name = name;
+    project.updatedAt = Date.now();
+
+    if (dbConnected.value) {
+      invoke("db_update_project_name", { id: projectId, name })
+        .catch((e) => console.error("[project] db_update_project_name failed:", e));
+    }
+    persist();
+    return true;
+  }
+
+  // ── 会话操作 ────────────────────────────────────────────
 
   function createConversation(projectId: string, title?: string, titleSource?: "default" | "manual", visible = true): Conversation {
     const project = projects.value.find((p) => p.id === projectId);
@@ -187,6 +333,21 @@ export const useProjectStore = defineStore("project", () => {
     };
     project.conversations.push(conv);
     project.updatedAt = Date.now();
+
+    if (dbConnected.value) {
+      invoke("db_create_session", {
+        projectId,
+        title: conv.title,
+        titleSource: conv.titleSource,
+        visible,
+      })
+        .then((row: any) => {
+          conv.id = row.id;
+          conv.createdAt = row.created_at;
+          conv.updatedAt = row.updated_at;
+        })
+        .catch((e) => console.error("[project] db_create_session failed:", e));
+    }
     persist();
     return conv;
   }
@@ -200,6 +361,11 @@ export const useProjectStore = defineStore("project", () => {
     project.updatedAt = Date.now();
     if (activeConversationId.value === convId) {
       activeConversationId.value = project.conversations[0]?.id ?? null;
+    }
+
+    if (dbConnected.value) {
+      invoke("db_delete_session", { id: convId })
+        .catch((e) => console.error("[project] db_delete_session failed:", e));
     }
     persist();
   }
@@ -242,6 +408,11 @@ export const useProjectStore = defineStore("project", () => {
     conv.titleSource = source;
     conv.updatedAt = Date.now();
     project.updatedAt = Date.now();
+
+    if (dbConnected.value) {
+      invoke("db_update_session_title", { id: convId, title })
+        .catch((e) => console.error("[project] db_update_session_title failed:", e));
+    }
     persist();
     return true;
   }
@@ -257,18 +428,76 @@ export const useProjectStore = defineStore("project", () => {
     conv.visible = true;
     conv.updatedAt = Date.now();
     project.updatedAt = Date.now();
+
+    if (dbConnected.value) {
+      invoke("db_reveal_session", { id: convId })
+        .catch((e) => console.error("[project] db_reveal_session failed:", e));
+    }
     persist();
     return true;
   }
 
-  // Initialize: default project + default conversation (only on first launch)
-  if (projects.value.length === 0) {
-    const defaultProject = createProject("默认项目");
-    const defaultConv = createConversation(defaultProject.id, "默认会话");
-    activeProjectId.value = defaultProject.id;
-    activeConversationId.value = defaultConv.id;
-    // persist() already called inside createProject + createConversation
+  // ── MySQL 消息操作（流式持久化用）─────────────────────────
+
+  /** 向 MySQL 插入新消息行，返回自增 id。仅 MySQL 模式调用。 */
+  async function dbAddMessage(sessionId: string, role: string, content: string, reasoning?: string, toolCallsJson?: string): Promise<number> {
+    if (!dbConnected.value) return 0;
+    try {
+      const row: any = await invoke("db_add_message", {
+        sessionId,
+        role,
+        content,
+        reasoning: reasoning ?? null,
+        toolCalls: toolCallsJson ?? null,
+      });
+      return row.id;
+    } catch (e) {
+      console.error("[project] db_add_message failed:", e);
+      return 0;
+    }
   }
+
+  /** 更新 MySQL 中的消息字段（流式 delta 或完成标记）。仅 MySQL 模式调用。 */
+  async function dbUpdateMessage(id: number, fields: Record<string, unknown>): Promise<void> {
+    if (!dbConnected.value || !id) return;
+    try {
+      await invoke("db_update_message", { id, fieldsJson: JSON.stringify(fields) });
+    } catch (e) {
+      console.error("[project] db_update_message failed:", e);
+    }
+  }
+
+  // ── 初始化 ──────────────────────────────────────────────
+
+  // 尝试从 MySQL 加载（异步，不阻塞 store 创建）
+  tryLoadFromMySql().then((loaded) => {
+    if (loaded) {
+      // MySQL 加载成功后的后处理
+      if (projects.value.length === 0) {
+        const defaultProject = createProject("默认项目");
+        const defaultConv = createConversation(defaultProject.id, "默认会话");
+        activeProjectId.value = defaultProject.id;
+        activeConversationId.value = defaultConv.id;
+      }
+      validateState();
+    } else {
+      // localStorage 回退
+      if (projects.value.length === 0) {
+        const defaultProject = createProject("默认项目");
+        const defaultConv = createConversation(defaultProject.id, "默认会话");
+        activeProjectId.value = defaultProject.id;
+        activeConversationId.value = defaultConv.id;
+      }
+    }
+  }).catch(() => {
+    // 连不上 MySQL，回退到 localStorage
+    if (projects.value.length === 0) {
+      const defaultProject = createProject("默认项目");
+      const defaultConv = createConversation(defaultProject.id, "默认会话");
+      activeProjectId.value = defaultProject.id;
+      activeConversationId.value = defaultConv.id;
+    }
+  });
 
   return {
     projects,
@@ -277,14 +506,19 @@ export const useProjectStore = defineStore("project", () => {
     activeProject,
     activeConversation,
     activeMessages,
+    dbConnected,
+    tryLoadFromMySql,
     createProject,
     importProject,
     deleteProject,
+    updateProjectName,
     createConversation,
     deleteConversation,
     switchTo,
     persistMessages,
     updateConversationTitle,
     revealConversation,
+    dbAddMessage,
+    dbUpdateMessage,
   };
 });

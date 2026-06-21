@@ -1,4 +1,5 @@
 pub mod deepseek;
+pub mod kimi;
 pub mod openai_compat;
 pub mod volcengine;
 
@@ -107,6 +108,14 @@ pub(crate) async fn openai_compat_chat(
 ) -> Result<Usage, anyhow::Error> {
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
+    // 兜底校验：如果 API key 为空则直接返回明确的中文错误提示，避免透传
+    // HTTP 401 "Invalid Authentication"，让用户在日志中快速定位配置缺失问题。
+    if api_key.trim().is_empty() {
+        let msg_text = "API 密钥未配置，请在设置中填写对应提供商的 API Key（DeepSeek / Kimi / 火山引擎）后点击「应用配置」".to_string();
+        tx.send(StreamEvent::Error { message: msg_text.clone() }).await.ok();
+        return Err(anyhow::anyhow!("{}", msg_text));
+    }
+
     eprintln!("[xuflow] POST {} | model={} | msgs={} | tools={}", url, model, params.messages.len(), params.tools.len());
 
     let body = serde_json::json!({
@@ -114,7 +123,10 @@ pub(crate) async fn openai_compat_chat(
         "messages": params.messages,
         "tools": params.tools,
         "stream": true,
-        "temperature": params.temperature.unwrap_or(0.7),
+        // 现代推理模型（DeepSeek-V4、Kimi K2 等）要求 temperature 必须为 1，
+        // 旧版 0.7 默认值会导致 HTTP 400 "only 1 is allowed"。统一默认 1.0，
+        // 非推理模型的常规生成由调用方按需覆盖。
+        "temperature": params.temperature.unwrap_or(1.0),
         "max_tokens": params.max_tokens.unwrap_or(4096),
     });
 
@@ -410,6 +422,9 @@ pub mod token_counter {
     /// Get the default context window size for a model.
     pub fn default_context_window(model_id: &str) -> u32 {
         let lower = model_id.to_lowercase();
+        if lower.contains("kimi") {
+            return 256_000;
+        }
         if lower.contains("deepseek") {
             return 128_000;
         }

@@ -9,6 +9,7 @@ use xuflow_core::{
     agent::types::ApprovalHandler,
     backends::{ChatMessage, ChatParams, LlmBackend, StreamEvent},
     backends::deepseek::DeepSeekBackend,
+    backends::kimi::KimiBackend,
     backends::volcengine::VolcEngineBackend,
     tools::{bash::BashTool, edit::EditFileTool, file::{ReadFileTool, WriteFileTool, ListDirTool}, git::{GitStatusTool, GitDiffTool, GitLogTool, GitAddTool, GitCommitTool}, glob::GlobTool, grep::GrepTool, todo::{TodoWriteTool, ProposePlanTool}, web::WebFetchTool, ToolRegistry},
 };
@@ -113,6 +114,7 @@ impl AgentSession {
     fn build_backend(provider: &str, model: &str, api_key: &str) -> Arc<dyn LlmBackend> {
         match provider {
             "volcengine" => Arc::new(VolcEngineBackend::new(model.to_string(), api_key.to_string(), None)),
+            "kimi" => Arc::new(KimiBackend::new(model.to_string(), api_key.to_string(), None)),
             _ => Arc::new(DeepSeekBackend::new(model.to_string(), api_key.to_string(), None)),
         }
     }
@@ -279,12 +281,13 @@ pub async fn send_message(
 }
 
 /// Read API keys from system environment variables.
-/// Looks for DEEP_SEEK_API_KEY and ARK_API_KEY (Volcengine/Ark).
+/// Looks for DEEP_SEEK_API_KEY, ARK_API_KEY (Volcengine/Ark), and KIMI_API_KEY.
 #[tauri::command]
 pub fn get_env_api_keys() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({
         "deepseek_api_key": std::env::var("DEEP_SEEK_API_KEY").unwrap_or_default(),
         "ark_api_key": std::env::var("ARK_API_KEY").unwrap_or_default(),
+        "kimi_api_key": std::env::var("KIMI_API_KEY").unwrap_or_default(),
     }))
 }
 

@@ -1,51 +1,49 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, onMounted, onUnmounted, computed } from "vue";
-import { NInput, NScrollbar } from "naive-ui";
+import { NInput, NScrollbar, NSelect, useMessage } from "naive-ui";
 import MessageItem from "./MessageItem.vue";
 import TodoPanel from "./TodoPanel.vue";
 import PlanApprovalCard from "../approval/PlanApprovalCard.vue";
 import { useAgentStore } from "../../stores/agent";
 import { useThemeStore } from "../../stores/theme";
-import { useConfigStore, ALL_MODELS } from "../../stores/config";
+import { useConfigStore } from "../../stores/config";
 import { useProjectStore } from "../../stores/project";
 import { useTauriEvent } from "../../composables/useTauriEvent";
 
 const store = useAgentStore();
 const themeStore = useThemeStore();
 const configStore = useConfigStore();
+const msg = useMessage();
 const { setupListeners, teardownListeners } = useTauriEvent();
 const inputText = ref("");
 const scrollRef = ref<InstanceType<typeof NScrollbar> | null>(null);
 const sending = ref(false);
 
+// ── Model switch animation ──
+const modelSwitchAnim = ref(false);
+let modelSwitchTimer: ReturnType<typeof setTimeout> | null = null;
+watch(
+  () => configStore.activeModelName,
+  () => {
+    modelSwitchAnim.value = true;
+    if (modelSwitchTimer) clearTimeout(modelSwitchTimer);
+    modelSwitchTimer = setTimeout(() => {
+      modelSwitchAnim.value = false;
+    }, 600);
+  }
+);
+onUnmounted(() => {
+  if (modelSwitchTimer) clearTimeout(modelSwitchTimer);
+});
+
 // ── Footbar state ──
 const isInfoTooltipVisible = ref(false);
-const isModelDropdownVisible = ref(false);
 const autoExecute = ref(false);
 // Plan Mode is sourced from the agent store so it persists across toggles
 const planMode = computed({
   get: () => store.planMode,
   set: (v: boolean) => { store.planMode = v; },
 });
-
-// Grouped model list for the hover dropdown
-const modelGroups = computed(() => {
-  const deepseekOfficial = ALL_MODELS.filter(m => m.provider === "deepseek");
-  const volcDeepseek = ALL_MODELS.filter(m => m.provider === "volcengine" && m.label.startsWith("DeepSeek"));
-  const volcDoubao = ALL_MODELS.filter(m => m.provider === "volcengine" && m.label.startsWith("Doubao"));
-  const volcGlm = ALL_MODELS.filter(m => m.provider === "volcengine" && m.label.startsWith("GLM"));
-  return [
-    { label: "DeepSeek 官方", models: deepseekOfficial },
-    { label: "火山引擎 · DeepSeek 系列", models: volcDeepseek },
-    { label: "火山引擎 · 豆包系列", models: volcDoubao },
-    { label: "火山引擎 · GLM 系列", models: volcGlm },
-  ].filter(g => g.models.length > 0);
-});
-
-function selectModel(modelValue: string) {
-  configStore.setActiveModelId(modelValue);
-  isModelDropdownVisible.value = false;
-}
 
 // Token usage — sourced from agent store, updated in real time via Tauri events
 const tokenPercent = computed(() => store.tokenUsagePercent);
@@ -57,14 +55,55 @@ const contextWindow = computed(() => store.contextWindow);
 const isEmpty = computed(() => store.messages.length === 0);
 const canSend = computed(() => inputText.value.trim().length > 0);
 
+// ── Smooth wheel scrolling ──
+function smoothWheelHandler(e: WheelEvent) {
+  // Only smooth vertical scrolling; let horizontal/shift-wheel pass through
+  if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+
+  e.preventDefault();
+  const target = e.currentTarget as HTMLElement;
+  target.scrollBy({
+    top: e.deltaY,
+    left: 0,
+    behavior: "smooth",
+  });
+}
+
+function attachSmoothScroll() {
+  // Find the scrollable content container inside NScrollbar
+  const container = scrollRef.value?.$el as HTMLElement | undefined;
+  if (!container) return;
+  const scrollContent = container.querySelector(".n-scrollbar-container") as HTMLElement | null;
+  if (scrollContent) {
+    scrollContent.addEventListener("wheel", smoothWheelHandler, { passive: false });
+  }
+}
+
 onMounted(() => {
   setupListeners();
   // Push current credentials to the Rust backend on mount
   store.configureAgent();
+  // Attach smooth scrolling once the scrollbar is rendered
+  nextTick(() => attachSmoothScroll());
 });
 
 onUnmounted(() => {
   teardownListeners();
+  // Clean up wheel listener
+  const container = scrollRef.value?.$el as HTMLElement | undefined;
+  if (container) {
+    const scrollContent = container.querySelector(".n-scrollbar-container") as HTMLElement | null;
+    if (scrollContent) {
+      scrollContent.removeEventListener("wheel", smoothWheelHandler);
+    }
+  }
+});
+
+// Re-attach smooth scroll handler when the scrollbar appears (first message)
+watch(isEmpty, (empty) => {
+  if (!empty) {
+    nextTick(() => attachSmoothScroll());
+  }
 });
 
 // Re-sync backend whenever the user switches model or provider
@@ -78,6 +117,15 @@ watch(
 async function sendMessage() {
   const text = inputText.value.trim();
   if (!text || sending.value) return;
+
+  // 发送前校验当前 provider 对应的 API 密钥是否已配置。
+  // 如果为空则直接提示用户前往设置页配置，避免透传原始 HTTP 401 错误。
+  // 检测逻辑：读取 configStore 中当前 provider 对应的 key 字段。
+  if (!configStore.activeApiKey) {
+    const providerName = configStore.activeProvider === "deepseek" ? "DeepSeek" : configStore.activeProvider === "kimi" ? "Kimi" : "火山引擎";
+    msg.warning(`请先在设置中配置 ${providerName} API 密钥`);
+    return;
+  }
 
   // Validate that there is an active conversation before clearing input
   const projectStore = useProjectStore();
@@ -189,8 +237,9 @@ watch(
                 @click="handleStop"
                 title="停止生成"
               >
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <rect x="2.5" y="2.5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <circle cx="8" cy="8" r="5.25" fill="#ffffff"/>
+                  <rect x="5.5" y="5.5" width="5" height="5" rx="0.8" fill="#2C2C2E"/>
                 </svg>
               </button>
               <button
@@ -211,33 +260,19 @@ watch(
             <div
               class="chat-footbar"
             >
-              <!-- Left: model name with hover dropdown -->
+              <!-- Left: model selector — plain text label over transparent NSelect -->
               <div class="footbar-left">
-                <div
-                  class="model-name-wrap"
-                  @mouseenter="isModelDropdownVisible = true"
-                  @mouseleave="isModelDropdownVisible = false"
-                >
-                  <span class="model-name-label">{{ configStore.activeModelName }}</span>
+                <div class="model-select-wrap">
+                  <span class="model-name-label" :class="{ 'model-switch-pulse': modelSwitchAnim }">{{ configStore.activeModelName }}</span>
                   <svg width="10" height="10" viewBox="0 0 10 10" fill="none" class="model-chevron">
                     <path d="M2.5 3.5L5 6L7.5 3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
                   </svg>
-                  <!-- Model dropdown -->
-                  <div v-if="isModelDropdownVisible" class="model-dropdown">
-                    <div v-for="group in modelGroups" :key="group.label" class="model-dropdown-group">
-                      <div class="model-dropdown-group-label">{{ group.label }}</div>
-                      <div
-                        v-for="m in group.models"
-                        :key="m.value"
-                        class="model-dropdown-item"
-                        :class="{ active: m.value === configStore.activeModelId }"
-                        @click="selectModel(m.value)"
-                      >
-                        <span class="model-dropdown-dot" :class="m.provider === 'deepseek' ? 'dot-deepseek' : 'dot-volc'"></span>
-                        {{ m.label }}
-                      </div>
-                    </div>
-                  </div>
+                  <NSelect
+                    v-model:value="configStore.activeModelId"
+                    :options="configStore.modelOptions"
+                    size="small"
+                    class="footbar-model-select"
+                  />
                 </div>
               </div>
 
@@ -379,6 +414,17 @@ watch(
   min-height: 0;
 }
 
+/* Smooth native scroll for the scrollable content area */
+.chat-scroll :deep(.n-scrollbar-container),
+.chat-scroll :deep(.n-scrollbar-content) {
+  scroll-behavior: smooth;
+}
+
+/* Override Naive UI's native scroll rail — make it less abrupt */
+.chat-scroll :deep(.n-scrollbar-rail) {
+  transition: opacity 0.3s ease;
+}
+
 /* ── Shared body: keep scroll area flexible and footer full width ── */
 .chat-body {
   flex: 1;
@@ -499,7 +545,7 @@ watch(
   gap: 10px;
 }
 
-/* Send circle — pill button pinned to the right */
+/* Send circle — flat light-gray background + dark arrow, high contrast */
 .send-circle {
   width: 38px;
   height: 38px;
@@ -509,69 +555,87 @@ watch(
   justify-content: center;
   border: none;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.05);
-  color: #bbb;
+  background: #E5E7EB;
+  color: #111827;
   cursor: pointer;
   transition: all 0.25s cubic-bezier(0.25, 0.1, 0.25, 1);
   flex-shrink: 0;
+  box-shadow: none;
 }
 
 .send-circle:hover {
-  background: rgba(0, 0, 0, 0.08);
-  color: #888;
+  background: #D1D5DB;
+  color: #000000;
 }
 
 .send-circle.active {
-  background: #007aff;
-  color: #fff;
-  box-shadow: 0 2px 12px rgba(0, 122, 255, 0.3);
+  background: #D1D5DB;
+  color: #000000;
+  box-shadow: none;
 }
 
 .send-circle.active:hover {
-  background: #0062cc;
+  background: #9CA3AF;
+  color: #000000;
   transform: scale(1.05);
-  box-shadow: 0 4px 16px rgba(0, 122, 255, 0.35);
+  box-shadow: none;
 }
 
 .send-circle[disabled] {
-  opacity: 0.3;
+  background: #F3F4F6;
+  color: #D1D5DB;
   cursor: default;
   transform: none !important;
 }
 
 .chat-panel.dark .send-circle {
-  background: rgba(255, 255, 255, 0.08);
-  color: #888;
+  background: #4B5563;
+  color: #F3F4F6;
+  box-shadow: none;
 }
 
 .chat-panel.dark .send-circle:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: #ccc;
+  background: #6B7280;
+  color: #FFFFFF;
 }
 
 .chat-panel.dark .send-circle.active {
-  background: #0a84ff;
-  color: #fff;
-  box-shadow: 0 2px 12px rgba(10, 132, 255, 0.35);
+  background: #6B7280;
+  color: #FFFFFF;
+  box-shadow: none;
 }
 
 .chat-panel.dark .send-circle.active:hover {
-  background: #409cff;
+  background: #9CA3AF;
+  color: #111827;
 }
 
 .chat-panel.dark .send-circle[disabled] {
-  opacity: 0.2;
+  background: #374151;
+  color: #6B7280;
 }
 
-/* Stop circle */
+/* Stop button — dark rounded rectangle, flat design */
 .stop-circle {
-  background: rgba(239, 68, 68, 0.08);
-  color: #ef4444;
+  width: 38px;
+  height: 38px;
+  border-radius: 20px;
+  background: #222222;
+  color: transparent;
+  box-shadow: none;
 }
 
 .stop-circle:hover {
-  background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
+  background: #333333;
+  transform: scale(1.05);
+}
+
+.chat-panel.dark .stop-circle {
+  background: #3a3a3e;
+}
+
+.chat-panel.dark .stop-circle:hover {
+  background: #4a4a4e;
 }
 
 /* ── Footbar ─────────────────────────────────────── */
@@ -592,7 +656,7 @@ watch(
   user-select: none;
 }
 
-/* ── Left: model name with hover dropdown ───────── */
+/* ── Left: model selector ───────── */
 
 .footbar-left {
   display: flex;
@@ -600,89 +664,92 @@ watch(
   flex-shrink: 1;
 }
 
-.model-name-wrap {
+/* ── Model select wrap: visible text + invisible NSelect overlay ── */
+
+.model-select-wrap {
   position: relative;
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  cursor: pointer;
-  user-select: none;
-}
-
-/* Invisible bridge to prevent mouse-out gap between trigger and dropdown */
-.model-name-wrap::before {
-  content: "";
-  position: absolute;
-  bottom: 100%;
-  left: 0;
-  right: 0;
-  height: 14px;
-  pointer-events: auto;
+  overflow: visible;
 }
 
 .model-name-label {
-  font-size: 12.5px;
+  font-size: 13.5px;
   font-weight: 500;
   color: #c8c8c8;
   white-space: nowrap;
   letter-spacing: 0.01em;
-  transition: color 0.15s ease;
+  transition: color 0.15s ease, opacity 0.15s ease, transform 0.15s ease;
+  pointer-events: none;
 }
 
-.model-name-wrap:hover .model-name-label {
+/* Subtle pulse animation when model switches */
+.model-switch-pulse {
+  animation: modelSwitchPulse 0.6s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+@keyframes modelSwitchPulse {
+  0% {
+    opacity: 0.5;
+    transform: translateY(3px);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-1px);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.model-select-wrap:hover .model-name-label {
   color: #e0e0e0;
 }
 
-.chat-panel.dark .model-name-label {
-  color: #9ca3af;
-}
-
-.chat-panel.dark .model-name-wrap:hover .model-name-label {
-  color: #d1d5db;
-}
-
-/* Chevron arrow */
+/* Chevron */
 .model-chevron {
   color: #6b7280;
   flex-shrink: 0;
-  transition: transform 0.2s ease;
+  pointer-events: none;
+  transition: transform 0.2s ease, color 0.15s ease;
 }
 
-.model-name-wrap:hover .model-chevron {
+.model-select-wrap:hover .model-chevron {
   color: #9ca3af;
   transform: rotate(180deg);
 }
 
-/* ── Model dropdown ────────────────────────────── */
-
-.model-dropdown {
+/* Invisible NSelect overlays the label — handles all click & dropdown logic */
+.footbar-model-select {
   position: absolute;
-  bottom: calc(100% + 8px);
   left: 0;
-  min-width: 220px;
-  max-height: 420px;
-  overflow-y: auto;
-  padding: 8px;
-  background: rgba(255, 255, 255, 0.97);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 14px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12), 0 4px 12px rgba(0, 0, 0, 0.06);
-  z-index: 30;
-  animation: dropdownIn 0.18s cubic-bezier(0.25, 0.1, 0.25, 1);
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: 210px;
+  opacity: 0;
 }
 
-.chat-panel.dark .model-dropdown {
-  background: rgba(36, 36, 42, 0.97);
-  border-color: rgba(255, 255, 255, 0.08);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+/* Let the selection fill the wider hit area so dropdown is wide enough */
+.footbar-model-select :deep(.n-base-selection) {
+  min-height: 24px;
 }
 
-@keyframes dropdownIn {
+/* Ensure the dropdown menu is wide enough for long model names */
+.footbar-model-select :deep(.n-base-select-menu) {
+  min-width: 220px !important;
+  animation: dropdownFadeIn 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+@keyframes dropdownFadeIn {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(-6px);
   }
   to {
     opacity: 1;
@@ -690,75 +757,14 @@ watch(
   }
 }
 
-.model-dropdown-group-label {
-  font-size: 10.5px;
-  font-weight: 600;
-  color: #9ca3af;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding: 8px 10px 4px;
+/* Dark theme */
+.chat-panel.dark .model-name-label {
+  color: #d4d4d4;
 }
 
-.chat-panel.dark .model-dropdown-group-label {
-  color: #6b7280;
+.chat-panel.dark .model-select-wrap:hover .model-name-label {
+  color: #f0f0f0;
 }
-
-.model-dropdown-group-label:first-child {
-  padding-top: 4px;
-}
-
-.model-dropdown-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: 10px;
-  font-size: 13.5px;
-  font-weight: 500;
-  color: #333;
-  cursor: pointer;
-  transition: background 0.12s ease;
-}
-
-.model-dropdown-item:hover {
-  background: rgba(0, 0, 0, 0.05);
-}
-
-.model-dropdown-item.active {
-  background: rgba(99, 102, 241, 0.08);
-  color: #6366f1;
-}
-
-.chat-panel.dark .model-dropdown-item {
-  color: #ddd;
-}
-
-.chat-panel.dark .model-dropdown-item:hover {
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.chat-panel.dark .model-dropdown-item.active {
-  background: rgba(129, 140, 248, 0.12);
-  color: #a5b4fc;
-}
-
-/* Provider dot */
-.model-dropdown-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.dot-deepseek {
-  background: #10b981;
-}
-
-.dot-volc {
-  background: #6366f1;
-}
-
-/* ── Right: context capacity circle + auto-execute ── */
 .context-circle-wrap {
   position: relative;
   display: flex;
