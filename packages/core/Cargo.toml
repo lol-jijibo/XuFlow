@@ -20,3 +20,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 futures-util = "0.3"
 tokio-util = { version = "0.7", features = ["rt"] }
 lazy_static = "1"
+# 网络内容抓取：DOM 解析 + 编码检测 + 正文提取
+scraper = "0.20"       # HTML DOM 解析（基于 Servo html5ever），用 CSS 选择器定位内容
+encoding_rs = "0.8"    # 字符编码自动检测（Firefox 同款引擎），解决乱码问题
+url = "2"              # URL 解析与规范化，处理相对路径、查询参数等
+robotstxt = "0.3"      # robots.txt 解析器，按网站爬取协议验证路径是否允许抓取

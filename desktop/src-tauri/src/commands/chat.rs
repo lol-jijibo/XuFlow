@@ -11,7 +11,7 @@ use xuflow_core::{
     backends::deepseek::DeepSeekBackend,
     backends::kimi::KimiBackend,
     backends::volcengine::VolcEngineBackend,
-    tools::{bash::BashTool, edit::EditFileTool, file::{ReadFileTool, WriteFileTool, ListDirTool}, git::{GitStatusTool, GitDiffTool, GitLogTool, GitAddTool, GitCommitTool}, glob::GlobTool, grep::GrepTool, todo::{TodoWriteTool, ProposePlanTool}, web::WebFetchTool, ToolRegistry},
+    tools::{bash::BashTool, edit::EditFileTool, file::{ReadFileTool, WriteFileTool, ListDirTool}, git::{GitStatusTool, GitDiffTool, GitLogTool, GitAddTool, GitCommitTool}, glob::GlobTool, grep::GrepTool, todo::{TodoWriteTool, ProposePlanTool}, web::WebFetchTool, web_crawl::WebCrawlTool, web_search::WebSearchTool, ToolRegistry},
 };
 
 // ---------------------------------------------------------------------------
@@ -133,6 +133,8 @@ impl AgentSession {
         registry.register(Box::new(GrepTool));
         registry.register(Box::new(BashTool));
         registry.register(Box::new(WebFetchTool));
+        registry.register(Box::new(WebSearchTool));
+        registry.register(Box::new(WebCrawlTool));
         registry.register(Box::new(GlobTool));
         registry.register(Box::new(GitStatusTool));
         registry.register(Box::new(GitDiffTool));

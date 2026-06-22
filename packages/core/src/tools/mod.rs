@@ -6,6 +6,8 @@ pub mod glob;
 pub mod grep;
 pub mod todo;
 pub mod web;
+pub mod web_crawl;
+pub mod web_search;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

@@ -3,6 +3,7 @@ pub mod backends;
 pub mod config;
 pub mod memory;
 pub mod tools;
+pub mod web;
 
 // Re-exports for convenience
 pub use memory::session::SessionStore;

@@ -16,6 +16,8 @@ Prefer edit over write_file for small changes in existing files.\n\
 - grep: Search file contents with regex.\n\
 - bash: Execute shell commands (requires user approval for dangerous commands).\n\
 - web_fetch: Fetch a web page and return its text content.\n\
+- web_search: Search the internet and return results with extracted content.\n\
+- web_crawl: Crawl a website from a seed URL, following links to extract content from multiple pages.\n\
 - git_status: Show working tree status.\n\
 - git_diff: Show unstaged or staged changes.\n\
 - git_log: Show recent commit history.\n\

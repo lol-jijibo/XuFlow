@@ -21,6 +21,8 @@ use xuflow_core::tools::{
     file::{ListDirTool, ReadFileTool, WriteFileTool},
     grep::GrepTool,
     web::WebFetchTool,
+    web_crawl::WebCrawlTool,
+    web_search::WebSearchTool,
     ToolRegistry,
 };
 
@@ -104,6 +106,8 @@ impl JsToolRegistry {
         registry.register(Box::new(GrepTool));
         registry.register(Box::new(BashTool));
         registry.register(Box::new(WebFetchTool));
+        registry.register(Box::new(WebSearchTool));
+        registry.register(Box::new(WebCrawlTool));
         Self {
             inner: Arc::new(registry),
         }
