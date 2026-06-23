@@ -34,6 +34,16 @@ pub struct DbState {
     pub store: Arc<SessionStore>,
 }
 
+// ── 数据库路径查询 ─────────────────────────────────────────
+
+/// 返回 SQLite 数据库文件的完整路径，供前端设置页显示。
+#[tauri::command]
+pub async fn db_get_path(
+    state: State<'_, Arc<DbState>>,
+) -> Result<String, String> {
+    Ok(state.store.db_path())
+}
+
 // ── 连接管理命令（适配前端已有的调用）──────────────────────────
 
 /// 初始化 SQLite 数据库连接。前端设置页的"保存并连接"按钮调用。

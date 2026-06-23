@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, computed } from "vue";
 import { useRouter } from "vue-router";
 import { NButton, NTooltip, NInput, NScrollbar, NDropdown, useMessage } from "naive-ui";
 import { useProjectStore } from "../../stores/project";
@@ -13,6 +13,7 @@ const message = useMessage();
 
 const expanded = ref<Record<string, boolean>>({});
 const headerHovered = ref(false);
+
 const creatingProject = ref(false);
 const newProjectName = ref("");
 const creatingConvProjectId = ref<string | null>(null);
@@ -210,21 +211,28 @@ function handleNewConversation() {
 
 <template>
   <div class="sidebar" :class="{ dark: themeStore.isDark }">
-    <!-- Logo -->
-    <div class="sidebar-logo" @click="router.push('/')">
-      <div class="logo-icon">
-        <img src="/xuflow.png" alt="Xuflow" class="logo-img" />
-      </div>
-      <span class="logo-text">Xuflow</span>
+    <!-- 新会话按钮（固定在最上方，不受项目展开/折叠影响） -->
+    <div class="new-conv-section">
+      <NButton
+        quaternary
+        class="new-conv-btn"
+        :disabled="!store.activeProjectId"
+        @click="handleNewConversation"
+      >
+        <template #icon>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+            <circle cx="12" cy="12" r="9" />
+            <line x1="12" y1="8" x2="12" y2="16" />
+            <line x1="8" y1="12" x2="16" y2="12" />
+          </svg>
+        </template>
+        新会话
+      </NButton>
     </div>
 
-    <!-- Project header -->
-    <div
-      class="project-header"
-      @mouseenter="headerHovered = true"
-      @mouseleave="headerHovered = false"
-    >
-      <span class="project-header-title">项目列表</span>
+    <!-- 项目标题（位于新会话下方、项目名上方） -->
+    <div class="project-header">
+      <span class="project-header-title">项目</span>
       <div class="project-header-actions">
         <NDropdown trigger="click" :options="projectActionOptions" @select="handleProjectAction">
           <NButton size="tiny" quaternary class="add-project-btn">
@@ -263,34 +271,6 @@ function handleNewConversation() {
       />
     </div>
 
-    <!-- New conversation button -->
-    <div class="new-conv-section">
-      <NButton
-        quaternary
-        class="new-conv-btn"
-        :disabled="!store.activeProjectId"
-        @click="handleNewConversation"
-      >
-        <template #icon>
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path
-              d="M2 3.5A1.5 1.5 0 013.5 2h7A1.5 1.5 0 0112 3.5v5a1.5 1.5 0 01-1.5 1.5H6l-2.5 2.5V10H3.5A1.5 1.5 0 012 8.5v-5z"
-              stroke="currentColor"
-              stroke-width="1.2"
-              stroke-linejoin="round"
-            />
-            <path
-              d="M6 5.5h4M8 3.5v4"
-              stroke="currentColor"
-              stroke-width="1.4"
-              stroke-linecap="round"
-            />
-          </svg>
-        </template>
-        新会话
-      </NButton>
-    </div>
-
     <!-- Project list -->
     <NScrollbar ref="scrollRef" class="project-list-scroll">
       <div class="project-list">
@@ -312,9 +292,18 @@ function handleNewConversation() {
             >
               <path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
-            <!-- Folder icon — wireframe -->
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" class="project-icon">
+            <!-- 闭合文件夹：仅线框轮廓，表示未展开 -->
+            <svg v-if="!isExpanded(project.id)" width="16" height="16" viewBox="0 0 16 16" fill="none" class="project-icon">
               <path d="M2 4.5A1.5 1.5 0 013.5 3h2.672a1.5 1.5 0 011.06.44l.768.768a1.5 1.5 0 001.06.44H12.5A1.5 1.5 0 0114 6.148V12.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 12.5V4.5z" stroke="currentColor" stroke-width="1.25" fill="none"/>
+            </svg>
+            <!-- 打开文件夹：半透明填充 + 内部横线 + 翻盖折页，明确表示已展开 -->
+            <svg v-else width="16" height="16" viewBox="0 0 16 16" fill="none" class="project-icon project-icon--open">
+              <!-- 主体轮廓 + 浅填充暗示内容可见 -->
+              <path d="M2 4.5A1.5 1.5 0 013.5 3h2.672a1.5 1.5 0 011.06.44l.768.768a1.5 1.5 0 001.06.44H12.5A1.5 1.5 0 0114 6.148V12.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 12.5V4.5z" stroke="currentColor" stroke-width="1.25" fill="currentColor" fill-opacity="0.12"/>
+              <!-- 内部横线：暗示文件夹内容已可见 -->
+              <line x1="5" y1="8.5" x2="11" y2="8.5" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity="0.45"/>
+              <!-- 翻盖折页：左上角翻开的视觉线索 -->
+              <path d="M3.5 4l1.5-2h2.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" opacity="0.6"/>
             </svg>
             <!-- 项目名：双击进入内联重命名，Enter/blur 确认，Escape 取消 -->
             <span
@@ -467,40 +456,6 @@ function handleNewConversation() {
   border-right-color: rgba(255, 255, 255, 0.06);
 }
 
-/* Logo */
-.sidebar-logo {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 14px 16px;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.logo-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.logo-img {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  object-fit: contain;
-}
-
-.logo-text {
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: -0.3px;
-  color: #1e293b;
-}
-
-.sidebar.dark .logo-text {
-  color: #e4e4e7;
-}
-
 /* Shared divider */
 .sidebar-divider {
   height: 1px;
@@ -525,19 +480,21 @@ function handleNewConversation() {
 
 /* New conversation button */
 .new-conv-section {
-  padding: 6px 10px;
+  padding: 8px 10px;
   flex-shrink: 0;
 }
 
 .new-conv-btn {
   width: 100%;
+  display: flex;
+  align-items: center;
   justify-content: flex-start;
-  gap: 7px;
-  font-size: 13px;
+  gap: 2px;
+  font-size: 14px;
   font-weight: 500;
   color: #6b7280;
   border-radius: 5px;
-  padding: 6px 8px;
+  padding: 8px 10px;
   transition: background 0.12s ease, color 0.12s ease;
 }
 
@@ -547,7 +504,7 @@ function handleNewConversation() {
 }
 
 .sidebar.dark .new-conv-btn {
-  color: #a1a1aa;
+  color: #ffffff;
 }
 
 .sidebar.dark .new-conv-btn:hover {
@@ -579,7 +536,7 @@ function handleNewConversation() {
 }
 
 .sidebar.dark .project-header-title {
-  color: #64748b;
+  color: #9ca3af;
 }
 
 .project-header-actions {
@@ -593,7 +550,7 @@ function handleNewConversation() {
 }
 
 .sidebar.dark .add-project-btn {
-  color: #64748b;
+  color: #ffffff;
 }
 
 /* Project list scroll */
@@ -643,7 +600,7 @@ function handleNewConversation() {
 }
 
 .sidebar.dark .project-chevron {
-  color: #6b7280;
+  color: #ffffff;
 }
 
 /* Folder icon */
@@ -654,7 +611,16 @@ function handleNewConversation() {
 }
 
 .sidebar.dark .project-icon {
+  color: #ffffff;
+}
+
+/* 打开状态的文件夹图标颜色加深，增强视觉区分 */
+.project-icon--open {
   color: #6b7280;
+}
+
+.sidebar.dark .project-icon--open {
+  color: #d1d5db;
 }
 
 /* Project name */
@@ -669,7 +635,7 @@ function handleNewConversation() {
 }
 
 .sidebar.dark .project-name {
-  color: #a1a1aa;
+  color: #ffffff;
 }
 
 .add-conv-btn {
@@ -680,6 +646,11 @@ function handleNewConversation() {
 
 .project-row:hover .add-conv-btn {
   opacity: 1;
+}
+
+/* Conversation list */
+.conversation-list {
+  padding-top: 4px;
 }
 
 /* ── Conversation list ──────────────────────── */
@@ -721,7 +692,7 @@ function handleNewConversation() {
 }
 
 .sidebar.dark .conv-icon {
-  color: #6b7280;
+  color: #ffffff;
 }
 
 .conversation-item.active .conv-icon {
@@ -729,7 +700,7 @@ function handleNewConversation() {
 }
 
 .sidebar.dark .conversation-item.active .conv-icon {
-  color: #9ca3af;
+  color: #ffffff;
 }
 
 /* Conversation title */
@@ -743,7 +714,7 @@ function handleNewConversation() {
 }
 
 .sidebar.dark .conv-title {
-  color: #a1a1aa;
+  color: #ffffff;
 }
 
 .conversation-item.active .conv-title {
@@ -766,7 +737,7 @@ function handleNewConversation() {
 }
 
 .sidebar.dark .conv-time {
-  color: #6b7280;
+  color: #ffffff;
 }
 
 .conversation-item.active .conv-time {
@@ -774,7 +745,7 @@ function handleNewConversation() {
 }
 
 .sidebar.dark .conversation-item.active .conv-time {
-  color: #8b8b96;
+  color: #ffffff;
 }
 
 /* Delete button */
@@ -798,7 +769,7 @@ function handleNewConversation() {
 }
 
 .sidebar.dark .conv-empty {
-  color: #6b7280;
+  color: #ffffff;
 }
 
 /* Bottom divider — separates global settings from project list */
@@ -835,7 +806,7 @@ function handleNewConversation() {
 }
 
 .sidebar.dark .bottom-btn {
-  color: #a1a1aa;
+  color: #ffffff;
 }
 
 .sidebar.dark .bottom-btn:hover {

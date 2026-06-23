@@ -21,8 +21,8 @@ pub fn run() {
             );
             app.manage(Arc::new(session));
 
-            // SQLite 数据库 — 测试阶段存储在 D 盘项目目录。
-            let db_path = std::path::PathBuf::from(r"D:\Projects-star\XuFlow-sqlite_content\xuflow.db");
+            // SQLite 数据库 — 存储在项目目录下，集中管理。
+            let db_path = std::path::PathBuf::from(r"D:\Projects-star\Xuflow\XuFlow-sqlite_content\xuflow.db");
             let store = SessionStore::open(Some(db_path))
                 .expect("无法初始化 SQLite 数据库");
             let db_state = Arc::new(DbState {
@@ -42,6 +42,8 @@ pub fn run() {
             commands::chat::generate_title,
             commands::chat::set_context_window,
             commands::chat::set_min_user_turns,
+            // 数据库路径
+            commands::persistence::db_get_path,
             // 数据库连接管理
             commands::persistence::db_connect,
             commands::persistence::db_test_connection,

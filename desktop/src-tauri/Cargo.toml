@@ -3,9 +3,11 @@ name = "xuflow-desktop"
 version.workspace = true
 edition.workspace = true
 
+# 默认不生成 staticlib（.lib 文件在 debug 下可达 1GB），仅发布时临时开启
+# 发布命令: cargo build --release 前将此行改为 crate-type = ["lib", "cdylib", "staticlib"]
 [lib]
 name = "xuflow_desktop_lib"
-crate-type = ["lib", "cdylib", "staticlib"]
+crate-type = ["lib", "cdylib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { NCard, NForm, NFormItem, NInput, NInputNumber, NButton, NText, NSlider } from "naive-ui";
-import { ref, watch, onBeforeUnmount, computed } from "vue";
+import { ref, watch, onBeforeUnmount, onMounted, computed } from "vue";
 import { useProjectStore } from "../../stores/project";
 import { invoke } from "@tauri-apps/api/core";
 import { useConfigStore, ALL_MODELS, type TokenEstimateConfig } from "../../stores/config";
@@ -89,6 +89,17 @@ const structHandler = (m: string) => (v: number | null) => handleStructuredCoeff
   const dbConnected = ref(true);
   const dbMigrating = ref(false);
   const dbMigratedCount = ref(0);
+  // 数据库文件的实际路径，从 Rust 后端获取。
+  const dbPath = ref("");
+
+  // 启动时获取数据库文件路径
+  onMounted(async () => {
+    try {
+      dbPath.value = await invoke<string>("db_get_path");
+    } catch (e) {
+      console.error("[settings] db_get_path failed:", e);
+    }
+  });
 
   /** 从 localStorage 迁移旧数据到 SQLite（仅首次执行）。 */
   async function migrateFromLocalStorage() {
@@ -497,7 +508,7 @@ watch(
           </div>
         </template>
         <div class="about-content">
-          <p>数据文件位置：<code>%APPDATA%/xuflow/xuflow.db</code>（Windows）</p>
+          <p>数据文件位置：<code>{{ dbPath || "解析中…" }}</code></p>
           <p>所有项目、会话和消息自动持久化到本地 SQLite 数据库，无需手动配置。</p>
           <p v-if="dbMigrating" style="color: #6b7280;">正在检查本地数据迁移…</p>
           <p v-else-if="dbMigratedCount > 0" style="color: #22c55e;">已从 localStorage 迁移 {{ dbMigratedCount }} 条消息。</p>

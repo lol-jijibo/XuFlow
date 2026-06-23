@@ -7,3 +7,19 @@ replace-with = "tsinghua"
 
 [source.tsinghua]
 registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"
+
+# 缩减 debug 构建体积：降低调试信息级别，仅保留行号表，剔除完整类型/变量信息
+[profile.dev]
+debug = "line-tables-only"
+# 增量编译缓存也占大量空间，本项目用全量重编反而更快（避免 sccache 级别的时间开销）
+incremental = false
+
+# 所有第三方依赖以体积优先优化（"s" = 压缩大小），同时避免对 workspace 成员生效
+[profile.dev.package."*"]
+strip = "none"
+debug = "line-tables-only"
+opt-level = "s"
+
+# 对 windows 等巨型依赖完全不生成调试信息
+[profile.dev.package.windows]
+debug = 0

@@ -7,3 +7,5 @@ dist/
 Thumbs.db
 .codegraph/
 *.node
+# SQLite 数据库文件 — 运行时数据，不应提交
+XuFlow-sqlite_content/

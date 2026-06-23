@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, onBeforeUnmount, ref } from "vue";
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useThemeStore } from "../../stores/theme";
 
 const props = defineProps<{
@@ -10,6 +11,36 @@ const props = defineProps<{
 }>();
 
 const themeStore = useThemeStore();
+
+/** 容器 DOM 引用，用于代理链接点击事件 */
+const containerRef = ref<HTMLElement | null>(null);
+
+/**
+ * 拦截渲染内容中的链接点击。
+ * http/https 链接通过系统默认浏览器打开，避免在 webview 内部跳转导致无法回退。
+ */
+function handleLinkClick(event: MouseEvent) {
+  const target = event.target as HTMLElement;
+  const anchor = target.closest("a");
+  if (!anchor) return;
+
+  const href = anchor.getAttribute("href");
+  if (!href) return;
+
+  // 仅拦截外部 http/https 链接，锚点跳转等保持 webview 内默认行为
+  if (href.startsWith("http://") || href.startsWith("https://")) {
+    event.preventDefault();
+    openUrl(href).catch((err) => console.warn("[StreamText] 打开外部链接失败:", err));
+  }
+}
+
+onMounted(() => {
+  containerRef.value?.addEventListener("click", handleLinkClick);
+});
+
+onBeforeUnmount(() => {
+  containerRef.value?.removeEventListener("click", handleLinkClick);
+});
 
 const md: MarkdownIt = new MarkdownIt({
   html: false,
@@ -52,6 +83,7 @@ const renderedHtml = computed(() => {
 
 <template>
   <div
+    ref="containerRef"
     class="stream-text markdown-body"
     :class="{ dark: themeStore.isDark }"
     v-html="renderedHtml"
@@ -244,11 +276,13 @@ const renderedHtml = computed(() => {
   text-decoration: none;
   border-bottom: 1px solid transparent;
   transition: border-color 0.15s ease;
+  cursor: pointer;
 }
 
 .markdown-body :deep(a:hover) {
   border-bottom-color: #60a5fa;
 }
+
 
 /* ── Horizontal rule ── */
 .markdown-body :deep(hr) {

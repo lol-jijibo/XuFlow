@@ -72,6 +72,8 @@ pub struct Message {
 
 pub struct SessionStore {
     conn: Mutex<Connection>,
+    // 数据库文件的实际路径，方便前端查询。
+    path: PathBuf,
 }
 
 impl SessionStore {
@@ -99,6 +101,7 @@ impl SessionStore {
 
         Ok(Self {
             conn: Mutex::new(conn),
+            path,
         })
     }
 
@@ -150,6 +153,11 @@ impl SessionStore {
             );",
         )?;
         Ok(())
+    }
+
+    /// 返回数据库文件的完整路径，供前端设置页显示。
+    pub fn db_path(&self) -> String {
+        self.path.to_string_lossy().to_string()
     }
 
     // ── 项目 CRUD ───────────────────────────────────────────
