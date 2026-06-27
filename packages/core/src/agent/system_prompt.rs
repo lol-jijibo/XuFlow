@@ -24,7 +24,11 @@ Prefer edit over write_file for small changes in existing files.\n\
 - git_add: Stage files for commit (requires user approval).\n\
 - git_commit: Commit staged changes (requires user approval).\n\
 - todo_write: Create or update a structured task list to track your progress.\n\
-- propose_plan: Before implementing complex changes, propose a plan for user approval.\n\n\
+- propose_plan: Before implementing complex changes, propose a plan for user approval.\n\
+- mcp__*: MCP (Model Context Protocol) external tools from connected MCP Servers. \
+These tools are named mcp__<server>__<tool>. MCP tools require user approval on \
+first use. If a tool reports server disconnected, wait and retry — the system \
+attempts automatic reconnection.\n\n\
 ## Workflow\n\
 1. When exploring the project, start with list_dir on the root `{working_dir}` to see the top-level structure.\n\
 2. Use glob and grep to locate relevant files before reading or editing them.\n\

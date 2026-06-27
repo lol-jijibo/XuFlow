@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod backends;
 pub mod config;
+pub mod mcp;
 pub mod memory;
 pub mod tools;
 pub mod web;

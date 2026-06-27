@@ -11,6 +11,7 @@ use xuflow_core::{
     backends::deepseek::DeepSeekBackend,
     backends::kimi::KimiBackend,
     backends::volcengine::VolcEngineBackend,
+    mcp::McpManager,
     tools::{bash::BashTool, edit::EditFileTool, file::{ReadFileTool, WriteFileTool, ListDirTool}, git::{GitStatusTool, GitDiffTool, GitLogTool, GitAddTool, GitCommitTool}, glob::GlobTool, grep::GrepTool, todo::{TodoWriteTool, ProposePlanTool}, web::WebFetchTool, web_crawl::WebCrawlTool, web_search::WebSearchTool, ToolRegistry},
 };
 
@@ -78,11 +79,16 @@ pub struct AgentSession {
     pub cancelled: AtomicBool,
     /// Shared approval channel — also held by TauriApprovalHandler.
     pub approval_tx: ApprovalChannel,
+    /// MCP 连接管理器，应用关闭时需调用 shutdown
+    /// 使用 Option 以支持在 configure_agent 中延迟初始化
+    pub mcp_manager: Arc<Mutex<Option<Arc<McpManager>>>>,
+    /// MCP 初始化时的警告/错误信息，供前端展示
+    pub mcp_init_errors: Arc<Mutex<Vec<String>>>,
 }
 
 impl AgentSession {
     /// Create a new session. Call `configure_agent` from the frontend to set
-    /// real credentials before the first `send_message`.
+    /// real credentials and initialize MCP connections before the first `send_message`.
     pub fn new(api_key: String, model: String, provider: String, app_handle: tauri::AppHandle) -> Self {
         let approval_tx: ApprovalChannel = Arc::new(Mutex::new(None));
 
@@ -91,23 +97,71 @@ impl AgentSession {
             .unwrap_or_else(|_| ".".to_string());
 
         let backend = Self::build_backend(&provider, &model, &api_key);
-        let agent = Self::build_agent(backend, app_handle.clone(), approval_tx.clone(), &working_dir);
+        let agent = Self::build_agent(
+            backend,
+            app_handle.clone(),
+            approval_tx.clone(),
+            &working_dir,
+            None, // MCP 将在 configure_agent 中延迟加载
+        );
 
         Self {
             agent: Mutex::new(agent),
             cancelled: AtomicBool::new(false),
             approval_tx,
+            mcp_manager: Arc::new(Mutex::new(None)),
+            mcp_init_errors: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     /// Rebuild the backend and agent loop with new credentials / model.
+    /// On first call, also initializes MCP connections from config files.
     pub async fn reconfigure(&self, api_key: String, model: String, provider: String, app_handle: tauri::AppHandle) {
         let working_dir = std::env::current_dir()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| ".".to_string());
 
+        // 延迟初始化 MCP：首次调用 configure_agent 时加载
+        // 后续调用不再重复加载，保持已建立的连接
+        let mcp_opt = {
+            let mut guard = self.mcp_manager.lock().await;
+            if guard.is_none() {
+                // 加载 MCP 配置并连接所有 Server
+                let global_path = xuflow_core::mcp::config::default_global_config_path();
+                let project_root = std::path::Path::new(&working_dir);
+                let (manager, init_errors) = McpManager::load_from_config(
+                    global_path.as_deref(),
+                    Some(project_root),
+                )
+                .await;
+
+                // 收集初始化警告
+                let mut errors_guard = self.mcp_init_errors.lock().await;
+                errors_guard.clear();
+                for err in &init_errors {
+                    if err.server_name.is_empty() {
+                        errors_guard.push(err.message.clone());
+                    } else {
+                        errors_guard.push(format!(
+                            "MCP Server '{}': {}",
+                            err.server_name, err.message
+                        ));
+                    }
+                }
+
+                *guard = Some(Arc::new(manager));
+            }
+            guard.clone()
+        };
+
         let backend = Self::build_backend(&provider, &model, &api_key);
-        let agent = Self::build_agent(backend, app_handle, self.approval_tx.clone(), &working_dir);
+        let agent = Self::build_agent(
+            backend,
+            app_handle,
+            self.approval_tx.clone(),
+            &working_dir,
+            mcp_opt,
+        );
         *self.agent.lock().await = agent;
     }
 
@@ -124,6 +178,7 @@ impl AgentSession {
         app_handle: tauri::AppHandle,
         approval_tx: ApprovalChannel,
         working_dir: &str,
+        mcp_manager: Option<Arc<McpManager>>,
     ) -> AgentLoop {
         let mut registry = ToolRegistry::new();
         registry.register(Box::new(ReadFileTool));
@@ -143,6 +198,12 @@ impl AgentSession {
         registry.register(Box::new(GitCommitTool));
         registry.register(Box::new(TodoWriteTool));
         registry.register(Box::new(ProposePlanTool));
+
+        // 将 MCP Server 提供的工具注册到 ToolRegistry
+        // 注册后的工具与内置工具在同一列表中，AgentLoop 统一调用
+        if let Some(ref mcp) = mcp_manager {
+            mcp.register_tools(&mut registry);
+        }
 
         let tools = Arc::new(registry);
         let approval: Arc<dyn ApprovalHandler> = Arc::new(TauriApprovalHandler::new(app_handle, approval_tx));

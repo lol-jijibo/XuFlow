@@ -244,19 +244,11 @@ impl AgentLoop {
 
         for _round in 0..MAX_TOOL_ROUNDS {
             // Build tool definitions from registry
-            let tool_defs: Vec<ToolDef> = self
-                .tools
-                .list()
-                .iter()
-                .map(|t| ToolDef {
-                    tool_type: "function".to_string(),
-                    function: FunctionDef {
-                        name: t.name().to_string(),
-                        description: t.description().to_string(),
-                        parameters: t.parameters(),
-                    },
-                })
-                .collect();
+            // 针对 MCP 工具数量过多导致 prompt 膨胀的问题，采用多级截断：
+            //   ≤ 20 个 MCP 工具：全量发送完整定义
+            //   21-40 个 MCP 工具：MCP 工具只保留 name + description，JSON Schema 置空
+            //   > 40 个 MCP 工具：按 Server 聚合为摘要行，LLM 需要细节时通过内置工具查询
+            let tool_defs: Vec<ToolDef> = build_tool_defs_with_truncation(self.tools.list());
 
             // Create intermediate channel: backend streams here, agent processes and forwards to caller
             let (backend_tx, mut backend_rx) = mpsc::channel::<StreamEvent>(256);
@@ -581,4 +573,100 @@ impl AgentLoop {
         .ok();
         Ok(total_usage)
     }
+}
+
+/// 构建工具定义列表，对 MCP 工具实施多级截断以防 prompt 膨胀
+/// MCP 工具通过名称前缀 "mcp__" 识别
+/// 截断策略:
+///   - MCP 工具 ≤ 20: 完整定义（含 JSON Schema）
+///   - MCP 工具 21-40: 只保留 name + description，parameters 设为 {{}}
+///   - MCP 工具 > 40: 按 Server 聚合为摘要，每个 Server 一行
+/// 内置工具始终全量发送
+fn build_tool_defs_with_truncation(tools: &[Box<dyn crate::tools::Tool>]) -> Vec<ToolDef> {
+    let (builtins, mcps): (Vec<_>, Vec<_>) = tools
+        .iter()
+        .partition(|t| !t.name().starts_with("mcp__"));
+
+    let mcp_count = mcps.len();
+
+    let mut defs: Vec<ToolDef> = builtins
+        .iter()
+        .map(|t| ToolDef {
+            tool_type: "function".to_string(),
+            function: FunctionDef {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                parameters: t.parameters(),
+            },
+        })
+        .collect();
+
+    match mcp_count {
+        0 => {} // 无 MCP 工具
+        1..=20 => {
+            // 全量：每个 MCP 工具完整定义
+            for t in &mcps {
+                defs.push(ToolDef {
+                    tool_type: "function".to_string(),
+                    function: FunctionDef {
+                        name: t.name().to_string(),
+                        description: t.description().to_string(),
+                        parameters: t.parameters(),
+                    },
+                });
+            }
+        }
+        21..=40 => {
+            // 降级：MCP 工具只发 name + 一行描述，parameters 为空对象
+            // LLM 可凭描述判断是否调用，参数由 MCP Server 在调用时校验
+            for t in &mcps {
+                defs.push(ToolDef {
+                    tool_type: "function".to_string(),
+                    function: FunctionDef {
+                        name: t.name().to_string(),
+                        description: t.description().to_string(),
+                        parameters: serde_json::json!({}),
+                    },
+                });
+            }
+        }
+        _ => {
+            // 严重降级：按 Server 聚合 MCP 工具为摘要描述
+            // 聚合为: "mcp__<server>__<tool1>, <tool2>, ..."
+            let mut server_map: std::collections::HashMap<String, Vec<String>> =
+                std::collections::HashMap::new();
+            for t in &mcps {
+                let name = t.name();
+                // mcp__<server>__<tool>
+                let parts: Vec<&str> = name.splitn(3, "__").collect();
+                if parts.len() >= 2 {
+                    server_map
+                        .entry(parts[1].to_string())
+                        .or_default()
+                        .push(parts.get(2).map(|s| s.to_string()).unwrap_or_default());
+                }
+            }
+
+            for (server, tool_list) in &server_map {
+                let summary = format!(
+                    "MCP Server '{}' 提供的工具: {}",
+                    server,
+                    tool_list.join(", ")
+                );
+                defs.push(ToolDef {
+                    tool_type: "function".to_string(),
+                    function: FunctionDef {
+                        name: format!("mcp__{}__list_tools", server),
+                        description: summary,
+                        parameters: serde_json::json!({
+                            "type": "object",
+                            "properties": {},
+                        }),
+                    },
+                });
+            }
+        }
+    }
+
+    defs
 }

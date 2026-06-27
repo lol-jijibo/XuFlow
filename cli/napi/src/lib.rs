@@ -15,6 +15,7 @@ use xuflow_core::backends::{
     LlmBackend, StreamEvent,
 };
 use xuflow_core::config::{AppConfig, ModelConfig};
+use xuflow_core::mcp::McpManager;
 use xuflow_core::memory::session::SessionStore;
 use xuflow_core::tools::{
     bash::BashTool,
@@ -92,26 +93,65 @@ impl OpenAICompat {
 
 #[napi]
 pub struct JsToolRegistry {
-    inner: Arc<ToolRegistry>,
+    pub(crate) inner: Arc<ToolRegistry>,
+    /// MCP manager — 保持生命周期，确保 MCP 连接不被提前 drop
+    #[allow(dead_code)]
+    mcp_manager: Option<Arc<McpManager>>,
 }
 
 #[napi]
 impl JsToolRegistry {
+    /// 创建不含 MCP 的工具注册表（仅内置工具）
     #[napi(constructor)]
     pub fn new() -> Self {
         let mut registry = ToolRegistry::new();
-        registry.register(Box::new(ReadFileTool));
-        registry.register(Box::new(WriteFileTool));
-        registry.register(Box::new(ListDirTool));
-        registry.register(Box::new(GrepTool));
-        registry.register(Box::new(BashTool));
-        registry.register(Box::new(WebFetchTool));
-        registry.register(Box::new(WebSearchTool));
-        registry.register(Box::new(WebCrawlTool));
+        register_builtin_tools(&mut registry);
         Self {
             inner: Arc::new(registry),
+            mcp_manager: None,
         }
     }
+
+    /// 创建包含 MCP 工具的完整工具注册表（内置 + MCP Server 工具）
+    /// global_config_path 和 project_root 为可选参数，传入 None 使用默认路径
+    /// 返回元组: (JsToolRegistry, Vec<String> 初始化警告)
+    #[napi]
+    pub async fn new_with_mcp(
+        global_config_path: Option<String>,
+        project_root: Option<String>,
+    ) -> napi::Result<JsToolRegistry> {
+        let mut registry = ToolRegistry::new();
+        register_builtin_tools(&mut registry);
+
+        let global_path = global_config_path.map(std::path::PathBuf::from);
+        let project = project_root.map(std::path::PathBuf::from);
+
+        let (manager, _init_errors) = McpManager::load_from_config(
+            global_path.as_deref(),
+            project.as_deref(),
+        )
+        .await;
+
+        // MCP 工具注册到 ToolRegistry（此时 registry 尚未被 Arc 包装）
+        manager.register_tools(&mut registry);
+
+        Ok(Self {
+            inner: Arc::new(registry),
+            mcp_manager: Some(Arc::new(manager)),
+        })
+    }
+}
+
+/// 注册所有内置工具
+fn register_builtin_tools(registry: &mut ToolRegistry) {
+    registry.register(Box::new(ReadFileTool));
+    registry.register(Box::new(WriteFileTool));
+    registry.register(Box::new(ListDirTool));
+    registry.register(Box::new(GrepTool));
+    registry.register(Box::new(BashTool));
+    registry.register(Box::new(WebFetchTool));
+    registry.register(Box::new(WebSearchTool));
+    registry.register(Box::new(WebCrawlTool));
 }
 
 // ─── Approval Handler (JS callback) ──────────────────────────
@@ -293,7 +333,7 @@ impl JsSessionStore {
             .store
             .lock()
             .unwrap()
-            .create_session(&id, &title)
+            .create_session_legacy(&id, &title)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(serde_json::to_string(&session).unwrap_or_default())
     }
@@ -304,7 +344,7 @@ impl JsSessionStore {
             .store
             .lock()
             .unwrap()
-            .list_sessions()
+            .list_sessions_legacy()
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(serde_json::to_string(&sessions).unwrap_or_default())
     }
@@ -315,7 +355,7 @@ impl JsSessionStore {
             .store
             .lock()
             .unwrap()
-            .get_session(&id)
+            .get_session_legacy(&id)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(session.map(|s| serde_json::to_string(&s).unwrap_or_default()))
     }
@@ -325,7 +365,7 @@ impl JsSessionStore {
         self.store
             .lock()
             .unwrap()
-            .delete_session(&id)
+            .delete_session_legacy(&id)
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
@@ -334,7 +374,7 @@ impl JsSessionStore {
         self.store
             .lock()
             .unwrap()
-            .update_session_title(&id, &title)
+            .update_session_title_legacy(&id, &title)
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
@@ -349,7 +389,7 @@ impl JsSessionStore {
             .store
             .lock()
             .unwrap()
-            .add_message(&session_id, &role, &content)
+            .add_message_legacy(&session_id, &role, &content)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(serde_json::to_string(&msg).unwrap_or_default())
     }
@@ -370,7 +410,7 @@ impl JsSessionStore {
         self.store
             .lock()
             .unwrap()
-            .clear_messages(&session_id)
+            .clear_messages_legacy(&session_id)
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 }
