@@ -46,6 +46,8 @@ export interface Project {
   name: string;
   path?: string;
   source: "local" | "imported";
+  /** 是否置顶，置顶项目始终排在列表最前面。 */
+  pinned?: boolean;
   conversations: Conversation[];
   createdAt: number;
   updatedAt: number;
@@ -57,6 +59,30 @@ function uid(): string {
 }
 
 const STORAGE_KEY = "xuflow-projects";
+const PINNED_KEY = "xuflow-pinned-projects";
+
+// ── 置顶项目 ID 持久化（独立于主存储，SQLite 模式下也生效）──
+
+function loadPinnedIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(PINNED_KEY);
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return new Set(arr);
+    }
+  } catch (e) {
+    console.error("[project] Failed to load pinned ids:", e);
+  }
+  return new Set();
+}
+
+function savePinnedIds(ids: Set<string>) {
+  try {
+    localStorage.setItem(PINNED_KEY, JSON.stringify([...ids]));
+  } catch (e) {
+    console.error("[project] Failed to save pinned ids:", e);
+  }
+}
 
 // ── localStorage 工具函数（SQLite 异常时的回退方案）────────
 
@@ -223,6 +249,24 @@ export const useProjectStore = defineStore("project", () => {
     activeConversation.value?.messages ?? []
   );
 
+  /** 按置顶优先排序后的项目列表：置顶项目排在最前。 */
+  const sortedProjects = computed(() => {
+    const arr = [...projects.value];
+    arr.sort((a, b) => {
+      if (a.pinned && !b.pinned) return -1;
+      if (!a.pinned && b.pinned) return 1;
+      return 0;
+    });
+    return arr;
+  });
+
+  // ── 置顶状态初始化（从 localStorage 恢复到 projects 的 pinned 字段）──
+
+  const pinnedIds = loadPinnedIds();
+  for (const p of projects.value) {
+    p.pinned = pinnedIds.has(p.id);
+  }
+
   // ── 项目操作 ────────────────────────────────────────────
 
   function createProject(name: string): Project {
@@ -307,14 +351,36 @@ export const useProjectStore = defineStore("project", () => {
     return true;
   }
 
+  /** 切换项目置顶状态。置顶项目始终排在列表最前面。 */
+  function pinProject(projectId: string): boolean {
+    const project = projects.value.find((p) => p.id === projectId);
+    if (!project) return false;
+    project.pinned = !project.pinned;
+
+    // 同步更新 localStorage 中的置顶 ID 集合
+    const pinnedIds = loadPinnedIds();
+    if (project.pinned) {
+      pinnedIds.add(projectId);
+    } else {
+      pinnedIds.delete(projectId);
+    }
+    savePinnedIds(pinnedIds);
+
+    // 不需要 SQLite 持久化（UI 偏好），仅触发响应式更新
+    projects.value = [...projects.value];
+    return true;
+  }
+
   // ── 会话操作 ────────────────────────────────────────────
 
   function createConversation(projectId: string, title?: string, titleSource?: "default" | "manual", visible = true): Conversation {
     const project = projects.value.find((p) => p.id === projectId);
     if (!project) throw new Error(`Project ${projectId} not found`);
+    // 隐藏会话（等 AI 回复后自动提炼标题再显示）不预设 "新会话 N" 标题
+    const defaultTitle = visible ? `新会话 ${project.conversations.length + 1}` : "";
     const conv: Conversation = {
       id: uid(),
-      title: title || `新会话 ${project.conversations.length + 1}`,
+      title: title || defaultTitle,
       titleSource: titleSource ?? (title ? "manual" : "default"),
       visible,
       messages: [],
@@ -491,6 +557,7 @@ export const useProjectStore = defineStore("project", () => {
 
   return {
     projects,
+    sortedProjects,
     activeProjectId,
     activeConversationId,
     activeProject,
@@ -501,6 +568,7 @@ export const useProjectStore = defineStore("project", () => {
     createProject,
     importProject,
     deleteProject,
+    pinProject,
     updateProjectName,
     createConversation,
     deleteConversation,

@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::mcp::client::McpClient;
-use crate::mcp::config::load_mcp_config;
+use crate::mcp::config::{load_mcp_config, load_mcp_config_multi, resolve_global_config_path};
 use crate::mcp::tool_adapter::McpToolAdapter;
 use crate::tools::ToolRegistry;
 
@@ -34,17 +34,36 @@ pub struct McpManager {
 
 impl McpManager {
     /// 从配置文件加载并连接所有 MCP Server
+    /// 当 global_config_path 为 None 时自动解析：环境变量 > 默认路径
     /// 连接失败的 Server 不阻塞整体流程，错误信息通过第二个返回值收集
     pub async fn load_from_config(
         global_config_path: Option<&Path>,
         project_root: Option<&Path>,
     ) -> (Self, Vec<McpInitError>) {
-        let (config, warnings) = load_mcp_config(global_config_path, project_root);
+        // 未显式指定路径时，使用智能解析（环境变量 > 默认路径）
+        let resolved = global_config_path.map(|p| p.to_path_buf()).or_else(resolve_global_config_path);
+        let (config, warnings) = load_mcp_config(resolved.as_deref(), project_root);
+        Self::connect_all(config, warnings).await
+    }
 
+    /// 使用智能路径解析加载 MCP 配置
+    /// 路径优先级：explicit_path > 环境变量 XUFLOW_MCP_CONFIG > 默认路径 + 项目级
+    pub async fn load_with_resolution(
+        explicit_path: Option<&Path>,
+        project_root: Option<&Path>,
+    ) -> (Self, Vec<McpInitError>) {
+        let (config, warnings) = load_mcp_config_multi(explicit_path, project_root);
+        Self::connect_all(config, warnings).await
+    }
+
+    /// 根据已合并的配置并发连接所有 MCP Server
+    async fn connect_all(
+        config: crate::mcp::config::MergedMcpConfig,
+        warnings: Vec<String>,
+    ) -> (Self, Vec<McpInitError>) {
         let mut clients: Vec<Arc<McpClient>> = Vec::new();
         let mut errors: Vec<McpInitError> = Vec::new();
 
-        // 将配置警告转为初始化错误（仅展示，不影响流程）
         for w in warnings {
             errors.push(McpInitError {
                 server_name: String::new(),
@@ -52,7 +71,6 @@ impl McpManager {
             });
         }
 
-        // 并发连接所有 Server（无序，先连好的先注册）
         for (name, server_config) in config.servers {
             match McpClient::initialize(name.clone(), server_config).await {
                 Ok(client) => {

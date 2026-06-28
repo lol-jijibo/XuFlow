@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:/Projects-star/Xuflow"],
+      "safeTools": ["list_directory", "read_text_file", "read_multiple_files", "get_file_info", "search_files", "directory_tree", "list_allowed_directories"]
+    },
+    "sqlite": {
+      "command": "C:/Users/Lenovo/AppData/Local/Programs/Python/Python312/Scripts/mcp-server-sqlite.exe",
+      "args": ["--db-path", "C:/Users/Lenovo/AppData/Roaming/xuflow/xuflow.db"],
+      "safeTools": ["read_query", "list_tables", "describe_table"]
+    }
+  }
+}

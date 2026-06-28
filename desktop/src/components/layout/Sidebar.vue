@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { NButton, NTooltip, NInput, NScrollbar, NDropdown, useMessage } from "naive-ui";
 import { useProjectStore } from "../../stores/project";
@@ -14,10 +14,90 @@ const message = useMessage();
 const expanded = ref<Record<string, boolean>>({});
 const headerHovered = ref(false);
 
+// ── 右键上下文菜单 ──────────────────────────────────────────
+// 鼠标右击项目行时弹出操作列表（删除、置顶等），点击其他区域自动关闭。
+
+const contextMenu = ref({
+  show: false,
+  x: 0,
+  y: 0,
+  projectId: null as string | null,
+});
+
+/** 打开右键菜单：记录鼠标位置和目标项目 ID，自动调整避免溢出屏幕边缘。 */
+function onProjectContextMenu(e: MouseEvent, projectId: string) {
+  e.preventDefault();
+  e.stopPropagation();
+  // 菜单预估尺寸：宽约 150px，每项高约 32px（置顶+删除共 2 项约 72px）
+  const menuW = 150;
+  const menuH = 80;
+  let x = e.clientX;
+  let y = e.clientY;
+  if (x + menuW > window.innerWidth) x = window.innerWidth - menuW - 8;
+  if (y + menuH > window.innerHeight) y = window.innerHeight - menuH - 8;
+  contextMenu.value = { show: true, x, y, projectId };
+}
+
+/** 关闭右键菜单。 */
+function closeContextMenu() {
+  contextMenu.value.show = false;
+}
+
+/** 全局点击时关闭右键菜单（点菜单自身除外）。 */
+function onGlobalClick(_e: MouseEvent) {
+  if (contextMenu.value.show) {
+    closeContextMenu();
+  }
+}
+
+/** 处理右键菜单选项：删除项目 / 置顶项目。 */
+function handleContextMenuSelect(key: string) {
+  const projectId = contextMenu.value.projectId;
+  closeContextMenu();
+  if (!projectId) return;
+
+  if (key === "delete") {
+    const project = store.projects.find((p) => p.id === projectId);
+    if (project) {
+      store.deleteProject(projectId);
+      message.success(`已删除项目: ${project.name}`);
+    }
+  } else if (key === "pin") {
+    const project = store.projects.find((p) => p.id === projectId);
+    const pinned = store.pinProject(projectId);
+    if (project) {
+      message.success(pinned ? `已置顶: ${project.name}` : `已取消置顶: ${project.name}`);
+    }
+  }
+}
+
+// 右键菜单选项：根据当前项目置顶状态动态生成。
+const contextMenuOptions = computed(() => {
+  const project = contextMenu.value.projectId
+    ? store.projects.find((p) => p.id === contextMenu.value.projectId)
+    : null;
+  return [
+    {
+      label: project?.pinned ? "取消置顶" : "置顶项目",
+      key: "pin",
+    },
+    {
+      label: "删除项目",
+      key: "delete",
+    },
+  ];
+});
+
+onMounted(() => {
+  document.addEventListener("click", onGlobalClick);
+});
+
+onUnmounted(() => {
+  document.removeEventListener("click", onGlobalClick);
+});
+
 const creatingProject = ref(false);
 const newProjectName = ref("");
-const creatingConvProjectId = ref<string | null>(null);
-const newConvTitle = ref("");
 const scrollRef = ref<InstanceType<typeof NScrollbar> | null>(null);
 
 // 重命名状态：项目名和会话名内联编辑
@@ -173,39 +253,25 @@ function fallbackImport() {
   }
 }
 
+// 点击项目旁的 + 号，直接在该项目下新建空白会话界面，不弹出命名输入框
 function startCreateConversation(projectId: string) {
-  creatingConvProjectId.value = projectId;
-  newConvTitle.value = "";
-}
-
-function finishCreateConversation() {
-  const projectId = creatingConvProjectId.value;
-  if (projectId) {
-    const conv = store.createConversation(
-      projectId,
-      newConvTitle.value.trim() || undefined
-    );
-    store.switchTo(projectId, conv.id);
-  }
-  creatingConvProjectId.value = null;
-  newConvTitle.value = "";
+  expanded.value[projectId] = true;
+  store.activeProjectId = projectId;
+  store.activeConversationId = null;
 }
 
 function handleDeleteConversation(projectId: string, convId: string) {
   store.deleteConversation(projectId, convId);
 }
 
-/** Create a hidden conversation under the active project — revealed after first AI response. */
+/** 清空当前活跃会话，切换到空白对话状态。
+ *  不立即创建会话 —— 等用户发送第一条消息时再按需创建。
+ *  会话标题在 AI 回复完成后自动提炼，避免侧边栏出现 "新会话 + 数字序号"。 */
 function handleNewConversation() {
   const projectId = store.activeProjectId;
   if (!projectId) return;
-  // Expand the active project so it's visible in the list
-  if (projectId) {
-    expanded.value[projectId] = true;
-  }
-  // Create conversation hidden (visible=false) — appears after agent:done
-  const conv = store.createConversation(projectId, undefined, undefined, false);
-  store.switchTo(projectId, conv.id);
+  expanded.value[projectId] = true;
+  store.activeConversationId = null;
 }
 </script>
 
@@ -275,12 +341,12 @@ function handleNewConversation() {
     <NScrollbar ref="scrollRef" class="project-list-scroll">
       <div class="project-list">
         <div
-          v-for="project in store.projects"
+          v-for="project in store.sortedProjects"
           :key="project.id"
           class="project-item"
         >
           <!-- Project row -->
-          <div class="project-row" @click="toggleProject(project.id)">
+          <div class="project-row" @click="toggleProject(project.id)" @contextmenu="onProjectContextMenu($event, project.id)">
             <!-- Chevron -->
             <svg
               class="project-chevron"
@@ -304,6 +370,10 @@ function handleNewConversation() {
               <line x1="5" y1="8.5" x2="11" y2="8.5" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity="0.45"/>
               <!-- 翻盖折页：左上角翻开的视觉线索 -->
               <path d="M3.5 4l1.5-2h2.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" opacity="0.6"/>
+            </svg>
+            <!-- 置顶图标 -->
+            <svg v-if="project.pinned" width="12" height="12" viewBox="0 0 14 14" fill="none" class="pin-indicator" title="已置顶">
+              <path d="M9.5 2L8.3 3.2l.5.5L10 4.8l.5-.5L12 5.5v-6L8.5 3l.5.5-2 2-1.5-1.5L4 5.5l4 4 1.5-1.5-1.5-1.5 2-2z" fill="currentColor" stroke="currentColor" stroke-width="0.8" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
             <!-- 项目名：双击进入内联重命名，Enter/blur 确认，Escape 取消 -->
             <span
@@ -336,25 +406,6 @@ function handleNewConversation() {
                 </svg>
               </template>
             </NButton>
-          </div>
-
-          <!-- Inline create conversation input -->
-          <div
-            v-if="creatingConvProjectId === project.id"
-            class="inline-create conv-create"
-          >
-            <NInput
-              v-model:value="newConvTitle"
-              size="small"
-              placeholder="会话名称..."
-              :autofocus="true"
-              @keydown.enter="finishCreateConversation"
-              @keydown.escape="
-                creatingConvProjectId = null;
-                newConvTitle = '';
-              "
-              @blur="finishCreateConversation"
-            />
           </div>
 
           <!-- Conversation list -->
@@ -435,6 +486,40 @@ function handleNewConversation() {
         设置
       </NButton>
     </div>
+
+    <!-- 右键上下文菜单：固定定位在鼠标位置，点击外部自动关闭 -->
+    <Teleport to="body">
+      <div
+        v-if="contextMenu.show"
+        class="context-menu-backdrop"
+        @click="closeContextMenu"
+        @contextmenu.prevent="closeContextMenu"
+      >
+        <div
+          class="context-menu"
+          :class="{ dark: themeStore.isDark }"
+          :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+        >
+          <div
+            v-for="opt in contextMenuOptions"
+            :key="opt.key"
+            class="context-menu-item"
+            :class="{ danger: opt.key === 'delete' }"
+            @click.stop="handleContextMenuSelect(opt.key)"
+          >
+            <!-- 置顶图标：图钉 -->
+            <svg v-if="opt.key === 'pin'" width="14" height="14" viewBox="0 0 14 14" fill="none" class="context-menu-icon">
+              <path d="M9.5 2L8.3 3.2l.5.5L10 4.8l.5-.5L12 5.5v-6L8.5 3l.5.5-2 2-1.5-1.5L4 5.5l4 4 1.5-1.5-1.5-1.5 2-2z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <!-- 删除图标：叉号 -->
+            <svg v-else-if="opt.key === 'delete'" width="14" height="14" viewBox="0 0 14 14" fill="none" class="context-menu-icon">
+              <path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            </svg>
+            <span>{{ opt.label }}</span>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -452,7 +537,7 @@ function handleNewConversation() {
 }
 
 .sidebar.dark {
-  background: #1e1e22;
+  background: #1a1a20;
   border-right-color: rgba(255, 255, 255, 0.06);
 }
 
@@ -623,6 +708,17 @@ function handleNewConversation() {
   color: #d1d5db;
 }
 
+/* 置顶指示图标 */
+.pin-indicator {
+  flex-shrink: 0;
+  color: #f59e0b;
+  margin-right: -2px;
+}
+
+.sidebar.dark .pin-indicator {
+  color: #fbbf24;
+}
+
 /* Project name */
 .project-name {
   flex: 1;
@@ -703,28 +799,32 @@ function handleNewConversation() {
   color: #ffffff;
 }
 
-/* Conversation title */
+/* Conversation title — 无衬线极客风，Inter / SF Pro 优先，抗锯齿 */
 .conv-title {
   flex: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 13px;
+  font-family: "Inter", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif;
+  font-size: 14px;
+  font-weight: 450;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   color: #374151;
 }
 
 .sidebar.dark .conv-title {
-  color: #ffffff;
+  color: #e4e4e7;
 }
 
 .conversation-item.active .conv-title {
-  color: #1e293b;
-  font-weight: 500;
+  color: #111827;
+  font-weight: 470;
 }
 
 .sidebar.dark .conversation-item.active .conv-title {
   color: #ffffff;
-  font-weight: 500;
+  font-weight: 470;
 }
 
 /* Relative timestamp */
@@ -812,5 +912,81 @@ function handleNewConversation() {
 .sidebar.dark .bottom-btn:hover {
   background: rgba(255, 255, 255, 0.04);
   color: #e4e4e7;
+}
+
+/* ── 右键上下文菜单 ──────────────────────────────── */
+
+/* 全屏透明遮罩：点击任意位置关闭菜单 */
+.context-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+}
+
+/* 菜单面板：浮于遮罩之上，跟随鼠标位置 */
+.context-menu {
+  position: fixed;
+  min-width: 140px;
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1), 0 1px 4px rgba(0, 0, 0, 0.06);
+  padding: 4px;
+  z-index: 10000;
+  overflow: hidden;
+}
+
+.context-menu.dark {
+  background: #25252b;
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* 菜单项 */
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  font-size: 13px;
+  color: #374151;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+  white-space: nowrap;
+}
+
+.context-menu-item:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.context-menu.dark .context-menu-item {
+  color: #e4e4e7;
+}
+
+.context-menu.dark .context-menu-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* 删除项使用红色高亮 */
+.context-menu-item.danger {
+  color: #ef4444;
+}
+
+.context-menu-item.danger:hover {
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.context-menu.dark .context-menu-item.danger {
+  color: #f87171;
+}
+
+.context-menu.dark .context-menu-item.danger:hover {
+  background: rgba(248, 113, 113, 0.12);
+}
+
+/* 菜单图标 */
+.context-menu-icon {
+  flex-shrink: 0;
 }
 </style>

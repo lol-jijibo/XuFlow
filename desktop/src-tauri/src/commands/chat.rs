@@ -116,7 +116,15 @@ impl AgentSession {
 
     /// Rebuild the backend and agent loop with new credentials / model.
     /// On first call, also initializes MCP connections from config files.
-    pub async fn reconfigure(&self, api_key: String, model: String, provider: String, app_handle: tauri::AppHandle) {
+    /// mcp_config_path: 可选的自定义 MCP 配置文件路径（前端设置页传入）
+    pub async fn reconfigure(
+        &self,
+        api_key: String,
+        model: String,
+        provider: String,
+        app_handle: tauri::AppHandle,
+        mcp_config_path: Option<String>,
+    ) {
         let working_dir = std::env::current_dir()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| ".".to_string());
@@ -126,12 +134,10 @@ impl AgentSession {
         let mcp_opt = {
             let mut guard = self.mcp_manager.lock().await;
             if guard.is_none() {
-                // 加载 MCP 配置并连接所有 Server
-                let global_path = xuflow_core::mcp::config::default_global_config_path();
-                let project_root = std::path::Path::new(&working_dir);
-                let (manager, init_errors) = McpManager::load_from_config(
-                    global_path.as_deref(),
-                    Some(project_root),
+                // 加载 MCP 配置：前端传入 > 环境变量 > 默认路径 + 项目级
+                let (manager, init_errors) = McpManager::load_with_resolution(
+                    mcp_config_path.as_deref().map(std::path::Path::new),
+                    Some(std::path::Path::new(&working_dir)),
                 )
                 .await;
 
@@ -221,6 +227,7 @@ impl AgentSession {
 /// Called by the frontend to push credentials & model selection to the backend.
 /// Must be invoked at least once before `send_message`, and again whenever the
 /// user changes provider / model / API key.
+/// mcp_config_path: 可选的自定义 MCP 配置文件路径（从设置页传入）
 #[tauri::command]
 pub async fn configure_agent(
     api_key: String,
@@ -228,8 +235,9 @@ pub async fn configure_agent(
     model: String,
     state: tauri::State<'_, Arc<AgentSession>>,
     app: tauri::AppHandle,
+    mcp_config_path: Option<String>,
 ) -> Result<(), String> {
-    state.reconfigure(api_key, model, provider, app).await;
+    state.reconfigure(api_key, model, provider, app, mcp_config_path).await;
     Ok(())
 }
 

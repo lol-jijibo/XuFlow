@@ -195,7 +195,7 @@ onBeforeUnmount(() => {
 
         <div class="assistant-content-column">
           <div class="assistant-flow">
-            <p v-if="showRunningStatus" class="assistant-flow-status">
+            <p v-if="showRunningStatus" class="assistant-flow-status" :class="{ 'shimmer-wave': isPromptRotatingPhase }">
               {{ agentStatusText }}
             </p>
 
@@ -336,6 +336,48 @@ onBeforeUnmount(() => {
   line-height: 1.6;
   color: #9ca3af;
   font-weight: 520;
+}
+
+/* 波纹滑过英文提示词 — 渐变高光从左到右扫过文字，营造动态生成感 */
+.shimmer-wave {
+  background: linear-gradient(
+    90deg,
+    #9ca3af 0%,
+    #9ca3af 35%,
+    #d1d5db 50%,
+    #9ca3af 65%,
+    #9ca3af 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmerSweep 2.2s ease-in-out infinite;
+}
+
+.dark .shimmer-wave {
+  background: linear-gradient(
+    90deg,
+    #9ca3af 0%,
+    #9ca3af 35%,
+    #e8e8ed 50%,
+    #9ca3af 65%,
+    #9ca3af 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmerSweep 2.2s ease-in-out infinite;
+}
+
+@keyframes shimmerSweep {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }
 
 .assistant-tool-status {

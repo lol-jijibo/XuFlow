@@ -14,8 +14,18 @@ const emit = defineEmits<{
 
 const themeStore = useThemeStore();
 
+/**
+ * 思考块的展开/折叠状态。
+ * 用户在流式输出期间手动点击的优先级最高（modelValue 已赋值）；
+ * 未手动操作时：思考流式输出中默认展开，思考完成后默认收起，
+ * 避免大段已完成的思考内容挤占回复区域的可见空间。
+ */
 const isExpanded = computed({
-  get: () => props.modelValue ?? true,
+  get: () => {
+    if (props.modelValue !== undefined) return props.modelValue;
+    // 思考未完成 → 展开让用户实时观看；已完成 → 收起避免占位
+    return isStreaming.value;
+  },
   set: (value) => emit("update:modelValue", value),
 });
 

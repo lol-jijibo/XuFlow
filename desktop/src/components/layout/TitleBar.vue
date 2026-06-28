@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { NButton, NText } from "naive-ui";
-import ModelSelector from "../config/ModelSelector.vue";
 import { useProjectStore } from "../../stores/project";
 import { useThemeStore } from "../../stores/theme";
 
@@ -14,16 +13,8 @@ const themeStore = useThemeStore();
       <NText tag="div" class="title-project">
         {{ projectStore.activeProject?.name ?? "Xuflow" }}
       </NText>
-      <NText
-        v-if="projectStore.activeConversation"
-        depth="3"
-        class="title-conv"
-      >
-        / {{ projectStore.activeConversation.title }}
-      </NText>
     </div>
     <div class="title-right">
-      <ModelSelector />
       <NButton
         quaternary
         size="small"

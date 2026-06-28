@@ -9,12 +9,19 @@ import { useThemeStore } from "../../stores/theme";
 import { useConfigStore } from "../../stores/config";
 import { useProjectStore } from "../../stores/project";
 import { useTauriEvent } from "../../composables/useTauriEvent";
+import { useReviewStore } from "../../stores/review";
 
 const store = useAgentStore();
 const themeStore = useThemeStore();
 const configStore = useConfigStore();
 const msg = useMessage();
 const { setupListeners, teardownListeners } = useTauriEvent();
+const projectStore = useProjectStore();
+const reviewStore = useReviewStore();
+/** 当前项目名：用于空状态引导语，实时告知用户正在哪个项目下操作。 */
+const currentProjectName = computed(() => projectStore.activeProject?.name ?? "Xuflow");
+/** 空状态引导标题：动态替换项目名，让用户明确操作上下文。 */
+const heroTitle = computed(() => `在 ${currentProjectName.value} 中开始你的 AI 编程...`);
 const inputText = ref("");
 const scrollRef = ref<InstanceType<typeof NScrollbar> | null>(null);
 const sending = ref(false);
@@ -127,16 +134,21 @@ async function sendMessage() {
     return;
   }
 
-  // Validate that there is an active conversation before clearing input
+  // 确保存在活跃会话；没有则按需创建（隐藏，等 AI 回复后自动提炼标题再显示）
   const projectStore = useProjectStore();
   if (!projectStore.activeConversation) {
-    // Auto-recover: create a default project + conversation if everything is gone
     if (!projectStore.activeProject) {
       const project = projectStore.createProject("默认项目");
       projectStore.switchTo(project.id);
     }
     if (projectStore.activeProject && !projectStore.activeConversation) {
-      const conv = projectStore.createConversation(projectStore.activeProject.id, "默认会话");
+      // 创建隐藏会话，不立即显示在侧边栏；AI 回复后由 agent:done 自动提炼标题并显示
+      const conv = projectStore.createConversation(
+        projectStore.activeProject.id,
+        undefined,
+        undefined,
+        false,
+      );
       projectStore.switchTo(projectStore.activeProject.id, conv.id);
     }
     if (!projectStore.activeConversation) {
@@ -178,17 +190,30 @@ watch(
 </script>
 
 <template>
-  <div class="chat-panel" :class="{ dark: themeStore.isDark }">
-    <!-- Empty state / Welcome -->
+  <div class="chat-panel" :class="{ dark: themeStore.isDark, 'is-empty': isEmpty }">
+    <!-- 对话区域右上角：侧边栏显示/隐藏切换按钮，用于快速打开代码审查面板 -->
+    <button
+      class="sidebar-toggle-btn"
+      :class="{ active: reviewStore.visible }"
+      @click="reviewStore.togglePanel()"
+      :title="reviewStore.visible ? '隐藏审查面板' : '显示审查面板'"
+    >
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+        <!-- 左侧面板线条 -->
+        <rect x="2" y="3" width="5" height="12" rx="1" stroke="currentColor" stroke-width="1.4" />
+        <!-- 分隔线 -->
+        <line x1="9" y1="4" x2="9" y2="14" stroke="currentColor" stroke-width="1.2" opacity="0.4" />
+        <!-- 右侧内容区域 -->
+        <rect x="11" y="5" width="5" height="4" rx="0.8" stroke="currentColor" stroke-width="1.2" />
+        <rect x="11" y="11" width="3" height="2" rx="0.6" stroke="currentColor" stroke-width="1" opacity="0.5" />
+      </svg>
+    </button>
+
+    <!-- 空状态引导页：居中展示核心引导提示语，移除 Logo 与说明文字，将视觉焦点集中在引导词与输入框上 -->
+    <!-- 通过大字号、适中字重的 Hero 标题营造类似 Codex/Cursor 的起始引导感，降低用户上手门槛 -->
     <div v-if="isEmpty" class="welcome-container">
       <div class="welcome-content">
-        <div class="welcome-logo">
-          <img src="/xuflow.png" alt="Xuflow" class="welcome-logo-img" />
-        </div>
-        <h2 class="welcome-title">开始对话</h2>
-        <p class="welcome-subtitle">
-          Xuflow 是你的 AI 编程助手，可以帮助你编写、调试和优化代码。
-        </p>
+        <h1 class="hero-title">{{ heroTitle }}</h1>
       </div>
     </div>
 
@@ -210,12 +235,12 @@ watch(
       </NScrollbar>
     </div> <!-- /chat-body -->
 
-    <!-- Footer: full-width overlay + centered input card -->
+    <!-- 底部输入区域：胶囊形输入卡片 + 独立功能栏，始终可见 -->
+    <!-- 将功能栏从输入卡片内部提取到外部，形成"输入框在上、配置栏在下"的独立功能组，空状态时由父级 justify-content:center 居中 -->
     <div class="chat-footer-outer">
-      <div class="chat-footer-shell chat-content-shell max-w-4xl mx-auto">
-        <div
-          class="chat-footer"
-        >
+      <div class="chat-footer-shell">
+        <!-- 胶囊形输入卡片：大圆角、微凸起背景 -->
+        <div class="chat-footer">
             <!-- Input row: text area + send button side by side -->
             <div class="input-row">
               <div class="input-area">
@@ -255,11 +280,9 @@ watch(
                 </svg>
               </button>
             </div>
-
-            <!-- ── Footbar: status strip attached below input ── -->
-            <div
-              class="chat-footbar"
-            >
+          </div>
+        <!-- 底部功能栏：模型选择、上下文容量、自动执行/先规划开关，独立于输入卡片 -->
+        <div class="chat-footbar">
               <!-- Left: model selector — plain text label over transparent NSelect -->
               <div class="footbar-left">
                 <div class="model-select-wrap">
@@ -341,7 +364,6 @@ watch(
                 </div>
               </div>
             </div>
-          </div>
       </div>
     </div>
   </div>
@@ -349,6 +371,7 @@ watch(
 
 <style scoped>
 .chat-panel {
+  position: relative;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -360,52 +383,95 @@ watch(
   background: #1a1a20;
 }
 
-/* Welcome */
-.welcome-container {
-  flex: 1;
+/* 对话区域右上角侧边栏切换按钮：悬浮于内容之上，与消息区保持距离 */
+.sidebar-toggle-btn {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 40px 20px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  z-index: 10;
+}
+
+.sidebar-toggle-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: #374151;
+}
+
+.sidebar-toggle-btn.active {
+  color: #6366f1;
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.sidebar-toggle-btn.active:hover {
+  color: #4f46e5;
+  background: rgba(99, 102, 241, 0.14);
+}
+
+.chat-panel.dark .sidebar-toggle-btn {
+  color: #6b7280;
+}
+
+.chat-panel.dark .sidebar-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #d1d5db;
+}
+
+.chat-panel.dark .sidebar-toggle-btn.active {
+  color: #818cf8;
+  background: rgba(129, 140, 248, 0.12);
+}
+
+.chat-panel.dark .sidebar-toggle-btn.active:hover {
+  color: #a5b4fc;
+  background: rgba(165, 180, 252, 0.18);
+}
+
+/* 空状态时整体内容垂直居中（引导语 + 输入框作为一组），上下留出呼吸空间 */
+.chat-panel.is-empty {
+  justify-content: center;
+  gap: 36px;
+}
+
+/* ── 空状态引导页：垂直居中，为 Hero 标题与下方输入框提供呼吸空间 ── */
+/* 不使用 flex:1，让 welcome + footer 作为整体由父级 justify-content:center 居中 */
+.welcome-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 20px;
 }
 
 .welcome-content {
-  max-width: 600px;
+  max-width: 700px;
   width: 100%;
   text-align: center;
 }
 
-.welcome-logo {
-  margin-bottom: 24px;
-}
-
-.welcome-logo-img {
-  width: 72px;
-  height: 72px;
-  border-radius: 18px;
-  object-fit: contain;
-}
-
-.welcome-title {
-  font-size: 28px;
-  font-weight: 700;
-  margin: 0 0 8px;
+/* 核心引导提示语：大字号（26px）、适中字重（550），营造 Codex/Cursor 起始引导感 */
+.hero-title {
+  font-family: "Inter", "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  font-size: 26px;
+  font-weight: 550;
+  letter-spacing: -0.02em;
+  line-height: 1.35;
+  margin: 0;
   color: #1c1c1c;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-.chat-panel.dark .welcome-title {
-  color: #ddd;
-}
-
-.welcome-subtitle {
-  font-size: 15px;
-  color: #777;
-  margin: 0 0 32px;
-  line-height: 1.6;
-}
-
-.chat-panel.dark .welcome-subtitle {
-  color: #999;
+.chat-panel.dark .hero-title {
+  color: #e8e8ed;
 }
 
 /* Messages */
@@ -443,55 +509,66 @@ watch(
   padding: 44px 44px 52px;
 }
 
-/* ── Footer overlay: spans the panel, while the input card stays centered ── */
+/* ── 底部输入区外层：非空状态底部吸附 + 渐变遮罩；空状态由父级居中控制 ── */
+/* 渐变仅在非空状态下生效，模拟消息内容淡入输入框的视觉效果 */
 .chat-footer-outer {
   flex-shrink: 0;
   width: 100%;
+  display: flex;
+  justify-content: center;
+  padding: 0 24px 24px;
+}
+
+.chat-footer-shell {
+  width: 100%;
+  max-width: 700px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+/* 非空状态：消息区底部渐变遮罩 */
+.chat-panel:not(.is-empty) .chat-footer-outer {
   padding: 14px 24px 24px;
   background: linear-gradient(to top, rgba(250, 250, 250, 0.92) 0%, rgba(250, 250, 250, 0) 60%);
 }
 
-.chat-panel.dark .chat-footer-outer {
+.chat-panel.dark:not(.is-empty) .chat-footer-outer {
   background: linear-gradient(to top, rgba(26, 26, 32, 0.94) 0%, rgba(26, 26, 32, 0) 60%);
 }
 
-.chat-footer-shell {
-  padding: 0 44px;
-}
-
-/* ── Apple-style frosted glass input + footbar ── */
+/* ── 胶囊形输入卡片：大圆角（28px）、微凸起、背景比主背景稍亮一阶 ── */
+/* 暗色模式下使用 #2C2C2E 营造层次感，亮色模式使用纯白 + 细边框 */
 .chat-footer {
   position: relative;
-  padding: 18px 22px 0;
   width: 100%;
-  background: rgba(255, 255, 255, 0.72);
-  backdrop-filter: blur(24px) saturate(1.2);
-  -webkit-backdrop-filter: blur(24px) saturate(1.2);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 28px;
+  padding: 10px 8px 10px 12px;
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 14px;
   box-shadow:
-    0 8px 32px rgba(0, 0, 0, 0.04),
-    0 2px 8px rgba(0, 0, 0, 0.02),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.5);
+    0 2px 8px rgba(0, 0, 0, 0.04),
+    0 0 0 1px rgba(0, 0, 0, 0.02);
   transition: background 0.4s ease, border-color 0.4s ease, box-shadow 0.4s ease;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif;
 }
 
 .chat-panel.dark .chat-footer {
-  background: rgba(28, 28, 33, 0.82);
-  backdrop-filter: blur(24px) saturate(1.1);
-  -webkit-backdrop-filter: blur(24px) saturate(1.1);
+  background: #2C2C2E;
   border-color: rgba(255, 255, 255, 0.08);
   box-shadow:
-    0 8px 32px rgba(0, 0, 0, 0.3),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+    0 2px 12px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(255, 255, 255, 0.04);
 }
 
-/* ── Input area — pure white canvas ── */
+/* ── 输入区域：flex:1 占据胶囊内剩余空间，内部 NInput 透明融合 ── */
 .input-area {
   position: relative;
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
 }
 
 .input-area :deep(.n-input__border),
@@ -515,7 +592,7 @@ watch(
 
 .input-area :deep(.n-input__textarea-el) {
   resize: none;
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.5;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
   background: transparent !important;
@@ -538,11 +615,11 @@ watch(
   color: #888 !important;
 }
 
-/* ── Input row: text area + send button side by side ── */
+/* ── 输入行：输入框 + 发送按钮水平并排，胶囊内垂直居中 ── */
 .input-row {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  align-items: center;
+  gap: 8px;
 }
 
 /* Send circle — flat light-gray background + dark arrow, high contrast */
@@ -638,21 +715,15 @@ watch(
   background: #4a4a4e;
 }
 
-/* ── Footbar ─────────────────────────────────────── */
-
+/* ── 底部功能栏：独立一行，小字体，与上方胶囊形成完整功能组 ── */
+/* 从输入卡片内部提取到外部，去掉背景/边框/圆角，呈现轻量纯文字工具栏 */
 .chat-footbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 48px;
-  padding: 0 16px;
-  margin: 10px -20px 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 0 0 28px 28px;   /* match parent bottom corners */
-  background: rgba(17, 17, 21, 0.42);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-  opacity: 1;
+  width: 100%;
+  padding: 0 10px;
+  height: 28px;
   user-select: none;
 }
 
@@ -677,11 +748,15 @@ watch(
 .model-name-label {
   font-size: 13.5px;
   font-weight: 500;
-  color: #c8c8c8;
+  color: #6b7280;
   white-space: nowrap;
   letter-spacing: 0.01em;
   transition: color 0.15s ease, opacity 0.15s ease, transform 0.15s ease;
   pointer-events: none;
+}
+
+.chat-panel.dark .model-name-label {
+  color: #d4d4d4;
 }
 
 /* Subtle pulse animation when model switches */
@@ -709,20 +784,32 @@ watch(
 }
 
 .model-select-wrap:hover .model-name-label {
-  color: #e0e0e0;
+  color: #374151;
+}
+
+.chat-panel.dark .model-select-wrap:hover .model-name-label {
+  color: #f0f0f0;
 }
 
 /* Chevron */
 .model-chevron {
-  color: #6b7280;
+  color: #9ca3af;
   flex-shrink: 0;
   pointer-events: none;
   transition: transform 0.2s ease, color 0.15s ease;
 }
 
 .model-select-wrap:hover .model-chevron {
-  color: #9ca3af;
+  color: #6b7280;
   transform: rotate(180deg);
+}
+
+.chat-panel.dark .model-chevron {
+  color: #6b7280;
+}
+
+.chat-panel.dark .model-select-wrap:hover .model-chevron {
+  color: #9ca3af;
 }
 
 /* Invisible NSelect overlays the label — handles all click & dropdown logic */
@@ -757,14 +844,6 @@ watch(
   }
 }
 
-/* Dark theme */
-.chat-panel.dark .model-name-label {
-  color: #d4d4d4;
-}
-
-.chat-panel.dark .model-select-wrap:hover .model-name-label {
-  color: #f0f0f0;
-}
 .context-circle-wrap {
   position: relative;
   display: flex;
@@ -897,7 +976,7 @@ watch(
   padding: 0;
   border: none;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.15);
   cursor: pointer;
   transition: background 0.25s cubic-bezier(0.25, 0.1, 0.25, 1);
   flex-shrink: 0;
@@ -936,7 +1015,7 @@ watch(
 .toggle-label {
   font-size: 12.5px;
   font-weight: 460;
-  color: #c8c8c8;
+  color: #6b7280;
   white-space: nowrap;
   letter-spacing: 0.01em;
 }
@@ -1001,19 +1080,32 @@ watch(
   }
 
   .chat-footer-shell {
-    padding: 0 10px;
+    max-width: 100%;
+  }
+
+  .chat-footer {
+    border-radius: 12px;
+    padding: 4px 6px 4px 14px;
   }
 
   .chat-footbar {
     height: auto;
-    min-height: 34px;
+    min-height: 28px;
     gap: 8px;
-    padding: 8px 14px;
+    padding: 6px 8px;
     flex-wrap: wrap;
   }
 
   .footbar-right {
     margin-left: auto;
+  }
+
+  .hero-title {
+    font-size: 22px;
+  }
+
+  .welcome-container {
+    padding: 0 16px;
   }
 }
 </style>

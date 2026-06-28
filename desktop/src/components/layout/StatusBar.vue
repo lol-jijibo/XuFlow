@@ -2,9 +2,16 @@
 import { computed } from "vue";
 import { useAgentStore } from "../../stores/agent";
 import { useThemeStore } from "../../stores/theme";
+import { useReviewStore } from "../../stores/review";
+import { useProjectStore } from "../../stores/project";
 
 const agentStore = useAgentStore();
 const themeStore = useThemeStore();
+const reviewStore = useReviewStore();
+const projectStore = useProjectStore();
+
+/** 当前项目名：实时跟随用户在侧边栏的选择切换。 */
+const currentProjectName = computed(() => projectStore.activeProject?.name ?? "Xuflow");
 
 const statusText = computed(() => {
   return agentStore.isRunning ? "\u{1F504} 生成中..." : "⚡ 就绪";
@@ -25,7 +32,12 @@ function formatK(n: number): string {
 
 const tokenLevel = computed(() => agentStore.tokenWarningLevel);
 
-const appVersion = "v1.0.2";
+const appVersion = "v1.0.3";
+
+/** 切换右侧审查面板，点击时自动拉取 diff */
+async function toggleReview() {
+  await reviewStore.togglePanel();
+}
 </script>
 
 <template>
@@ -35,10 +47,22 @@ const appVersion = "v1.0.2";
         <svg width="15" height="15" viewBox="0 0 16 16" fill="none" class="project-icon-svg">
           <path d="M2 4.5A1.5 1.5 0 013.5 3h2.63a1.5 1.5 0 011.06.44l.77.77a1.5 1.5 0 001.06.44H12.5A1.5 1.5 0 0114 6.15V12.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 12.5V4.5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
         </svg>
-        <span class="project-name">Xuflow</span>
+        <span class="project-name">{{ currentProjectName }}</span>
       </span>
     </div>
     <div class="status-right">
+      <!-- 审查面板切换按钮 -->
+      <button
+        class="review-toggle-btn"
+        :class="{ active: reviewStore.visible }"
+        @click="toggleReview"
+        title="代码审查"
+      >
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M2 3.5A1.5 1.5 0 013.5 2h2.63a1.5 1.5 0 011.06.44l.77.77a1.5 1.5 0 001.06.44H10.5A1.5 1.5 0 0112 5.15V10.5a1.5 1.5 0 01-1.5 1.5h-7A1.5 1.5 0 012 10.5V3.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+        </svg>
+        <span v-if="reviewStore.changedFileCount > 0" class="review-badge">{{ reviewStore.changedFileCount }}</span>
+      </button>
       <span v-if="tokenLabel" class="token-label" :class="'token-' + tokenLevel">{{ tokenLabel }}</span>
       <span class="status-divider" v-if="tokenLabel">·</span>
       <span class="status-label">{{ statusText }}</span>
@@ -156,5 +180,67 @@ const appVersion = "v1.0.2";
 
 .dark .version-label {
   color: #6b7280;
+}
+
+/* ── 审查面板切换按钮 ── */
+.review-toggle-btn {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.review-toggle-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: #6366f1;
+}
+
+.review-toggle-btn.active {
+  background: rgba(99, 102, 241, 0.1);
+  color: #6366f1;
+}
+
+.dark .review-toggle-btn {
+  color: #6b7280;
+}
+
+.dark .review-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #818cf8;
+}
+
+.dark .review-toggle-btn.active {
+  background: rgba(129, 140, 248, 0.12);
+  color: #818cf8;
+}
+
+.review-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: #6366f1;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  font-family: "SF Mono", "Cascadia Code", monospace;
+}
+
+.dark .review-badge {
+  background: #818cf8;
 }
 </style>

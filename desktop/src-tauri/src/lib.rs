@@ -42,6 +42,13 @@ pub fn run() {
             commands::chat::generate_title,
             commands::chat::set_context_window,
             commands::chat::set_min_user_turns,
+            // Git 审查相关
+            commands::git::git_diff_raw,
+            commands::git::git_status_raw,
+            commands::git::git_add,
+            commands::git::git_reset_file,
+            commands::git::git_checkout_file,
+            commands::git::git_checkout_all,
             // 数据库路径
             commands::persistence::db_get_path,
             // 数据库连接管理

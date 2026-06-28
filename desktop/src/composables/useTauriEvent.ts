@@ -116,11 +116,15 @@ export function useTauriEvent() {
     );
 
     // ── Reasoning / thinking deltas ──
+    // 新一轮思考开始时，之前可能已收到过 reasoning-done，需要重置标记。
+    // 否则 ReasoningBlock 会在思考仍在流式输出时显示"思考已完成"。
     unlisteners.push(
       await listen<string>("agent:reasoning-delta", (event) => {
         const msg = lastStreamingMsg();
         if (!msg) return;
         if (msg.reasoning === undefined) msg.reasoning = "";
+        // 新一轮思考开始：清除上一轮的完成标记，让 UI 正确显示"思考中..."
+        if (msg.reasoningDone) msg.reasoningDone = false;
         msg.reasoning += event.payload;
         schedulePersist();
       })
@@ -253,7 +257,7 @@ export function useTauriEvent() {
 
     // ── Agent loop done ──
     unlisteners.push(
-      await listen<string>("agent:done", (event) => {
+      await listen<string>("agent:done", async (event) => {
         // Version-aware usage parsing (v=1: { v: 1, usage: { total_tokens, ... } })
         try {
           const p = JSON.parse(event.payload);
@@ -270,19 +274,31 @@ export function useTauriEvent() {
           const lastMsg = msgs[msgs.length - 1];
           if (lastMsg && lastMsg.role === "assistant") {
             lastMsg.done = true;
-          }
-          // Reveal hidden conversation in sidebar
-          if (conv.visible === false && project) {
-            projectStore.revealConversation(project.id, conv.id);
+            // AI 彻底生成完毕后自动收起思考块，避免占据过多空间
+            // 仅当用户未手动操作时自动收起（undefined = 未操作过）
+            if (lastMsg.reasoningExpanded === undefined) {
+              lastMsg.reasoningExpanded = false;
+            }
           }
         }
         agentStore.isRunning = false;
         flushPersist();
 
-        // Trigger conversation summary (non-blocking)
-        trySummarizeConversation().catch((e) =>
-          console.warn("[summary] trySummarizeConversation error:", e)
-        );
+        // 先提炼标题再显示会话，确保侧边栏展示时已是 AI 生成的标题
+        if (conv && project && conv.visible === false) {
+          try {
+            await trySummarizeConversation();
+          } catch (e) {
+            console.warn("[summary] Failed to generate title:", e);
+          }
+          // 标题提炼完成后再显示（即使失败也显示，用默认标题兜底）
+          projectStore.revealConversation(project.id, conv.id);
+        } else {
+          // 已可见的会话：非阻塞触发标题更新
+          trySummarizeConversation().catch((e) =>
+            console.warn("[summary] trySummarizeConversation error:", e)
+          );
+        }
       })
     );
 
@@ -290,12 +306,21 @@ export function useTauriEvent() {
     unlisteners.push(
       await listen<string>("agent:error", (event) => {
         const conv = projectStore.activeConversation;
+        const project = projectStore.activeProject;
         if (conv) {
           const msgs = conv.messages;
           const lastMsg = msgs[msgs.length - 1];
           if (lastMsg && lastMsg.role === "assistant") {
             lastMsg.content += `\n[Error: ${event.payload}]`;
             lastMsg.done = true;
+            // 出错时同样自动收起思考块
+            if (lastMsg.reasoningExpanded === undefined) {
+              lastMsg.reasoningExpanded = false;
+            }
+          }
+          // 出错时也显示隐藏的会话，避免用户发送了消息但会话永远不可见
+          if (conv.visible === false && project) {
+            projectStore.revealConversation(project.id, conv.id);
           }
         }
         agentStore.isRunning = false;
