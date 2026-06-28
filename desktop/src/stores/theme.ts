@@ -155,9 +155,21 @@ export const useThemeStore = defineStore("theme", () => {
   // ── Contrast CSS variable ──
   function applyContrast() {
     const root = document.documentElement;
-    root.style.setProperty("--xuflow-contrast", String(contrast.value / 100));
+    const app = document.getElementById("app");
+    const ratio = contrast.value / 100;
+    root.style.setProperty("--xuflow-contrast", String(ratio));
     root.style.setProperty("--xuflow-ui-font-size", `${uiFontSize.value}px`);
     root.style.setProperty("--xuflow-code-font-size", `${codeFontSize.value}px`);
+
+    // 仅在对比度偏离默认值（100）时才启用 filter，
+    // 避免 contrast(1) 产生无意义的 GPU 合成层导致文字模糊
+    if (app) {
+      if (contrast.value !== 100) {
+        app.style.filter = `contrast(${ratio})`;
+      } else {
+        app.style.filter = "";
+      }
+    }
   }
 
   // ── Apply theme to document ──

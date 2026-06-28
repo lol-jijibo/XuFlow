@@ -1,17 +1,18 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { Icon } from "@iconify/vue";
+import { useReviewStore } from "../../stores/review";
 import type { DiffFile } from "../../utils/diffParser";
 import ReviewDiffItem from "./ReviewDiffItem.vue";
 
-// 变更文件列表，每个文件可展开查看 diff 详情
+// 变更文件列表：默认所有文件折叠（仅显示摘要），通过工具栏可切换折叠/展开
 
 defineProps<{
   files: DiffFile[];
 }>();
 
+const store = useReviewStore();
 const expandedFiles = ref<Set<string>>(new Set());
-const collapsedAll = ref(false);
 
 function toggleExpand(path: string) {
   const next = new Set(expandedFiles.value);
@@ -21,22 +22,17 @@ function toggleExpand(path: string) {
 }
 
 function isExpanded(path: string): boolean {
+  // 全局折叠模式：所有文件折叠
+  if (store.collapseAll) return false;
   return expandedFiles.value.has(path);
 }
 
-/** 全部折叠/展开 */
-function toggleAll() {
-  if (collapsedAll.value) {
-    expandedFiles.value = new Set();
-    collapsedAll.value = true;
-  }
-  collapsedAll.value = !collapsedAll.value;
-  if (collapsedAll.value) {
-    expandedFiles.value = new Set();
-  }
+/** 生成稳定的文件锚点 ID（与工具栏保持一致） */
+function fileId(path: string): string {
+  return "review-file-" + path.replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
-/** 文件扩展名 -> Iconify logos 图标名映射，使用各语言/工具官方 Logo */
+// ── 语言图标映射（与之前一致） ──
 const EXT_ICON_MAP: Record<string, string> = {
   ts:   "logos:typescript-icon",
   tsx:  "logos:typescript-icon",
@@ -95,47 +91,35 @@ const EXT_ICON_MAP: Record<string, string> = {
   erl:  "logos:erlang",
 };
 
-/** 根据文件路径返回 Iconify 图标名，未匹配返回空由模板兜底显示文本标签 */
 function langIcon(filePath: string): string | null {
   const ext = filePath.split(".").pop()?.toLowerCase() || "";
-  // 特殊处理：无扩展名的文件（如 Dockerfile）
   const base = filePath.split("/").pop()?.toLowerCase() || "";
   if (EXT_ICON_MAP[base]) return EXT_ICON_MAP[base];
   if (EXT_ICON_MAP[ext]) return EXT_ICON_MAP[ext];
   return null;
 }
 
-/** 未匹配图标时，取扩展名前 3 个字符大写作为兜底文本标签 */
 function langFallbackLabel(filePath: string): string {
   const ext = filePath.split(".").pop()?.toLowerCase() || "";
   return ext.slice(0, 3).toUpperCase() || "?";
 }
-
 </script>
 
 <template>
   <div class="file-list">
-    <!-- 工具栏：全部折叠/展开 + 统计 -->
-    <div class="file-list-toolbar">
-      <button class="file-list-toggle-all" @click="toggleAll">
-        {{ collapsedAll ? "展开全部" : "折叠全部" }}
-      </button>
-      <span class="file-list-summary">{{ files.length }} 个文件</span>
-    </div>
-
     <!-- 文件列表 -->
     <div
       v-for="file in files"
       :key="file.path"
+      :id="fileId(file.path)"
       class="file-item"
     >
-      <!-- 文件头部：语言图标 + 状态圆点 + 路径 + 变更统计 + 展开按钮 -->
+      <!-- 文件头部：语言图标 + 路径 + 变更统计 + 展开/折叠箭头 -->
       <div
         class="file-item-header"
         :class="{ expanded: isExpanded(file.path) }"
         @click="toggleExpand(file.path)"
       >
-        <!-- 语言官方 Logo：通过 Iconify logos 图标集展示真实产品商标 -->
         <Icon
           v-if="langIcon(file.path)"
           :icon="langIcon(file.path) ?? ''"
@@ -143,11 +127,7 @@ function langFallbackLabel(filePath: string): string {
           width="13"
           height="14"
         />
-        <!-- 未匹配图标时兜底显示文本标签 -->
-        <span
-          v-else
-          class="file-lang-fallback"
-        >{{ langFallbackLabel(file.path) }}</span>
+        <span v-else class="file-lang-fallback">{{ langFallbackLabel(file.path) }}</span>
         <span class="file-path">{{ file.path }}</span>
         <span class="file-change-count">
           <span class="add-count">+{{ file.additions }}</span>
@@ -172,51 +152,13 @@ function langFallbackLabel(filePath: string): string {
 
 <style scoped>
 .file-list {
-  padding: 8px 0;
-}
-
-/* ── 工具栏 ── */
-.file-list-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 14px 8px;
-}
-
-.file-list-toggle-all {
-  font-size: 11px;
-  font-weight: 500;
-  color: #6366f1;
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 2px 0;
-}
-
-.file-list-toggle-all:hover {
-  color: #4f46e5;
-}
-
-.dark .file-list-toggle-all {
-  color: #818cf8;
-}
-
-.dark .file-list-toggle-all:hover {
-  color: #a5b4fc;
-}
-
-.file-list-summary {
-  font-size: 11px;
-  color: #9ca3af;
-}
-
-.dark .file-list-summary {
-  color: #6b7280;
+  padding: 4px 0;
 }
 
 /* ── 文件条目 ── */
 .file-item {
   border-bottom: 1px solid rgba(0, 0, 0, 0.03);
+  scroll-margin-top: 8px;
 }
 
 .dark .file-item {
@@ -227,12 +169,23 @@ function langFallbackLabel(filePath: string): string {
   border-bottom: none;
 }
 
+/* ── 导航定位高亮闪烁动画 ── */
+.file-item:global(.file-flash) {
+  animation: fileFlash 1.2s ease;
+}
+
+@keyframes fileFlash {
+  0%   { background: rgba(99, 102, 241, 0.12); }
+  60%  { background: rgba(99, 102, 241, 0.04); }
+  100% { background: transparent; }
+}
+
 /* ── 文件头部 ── */
 .file-item-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 14px;
+  padding: 9px 14px;
   cursor: pointer;
   transition: background 0.12s ease;
 }
@@ -253,13 +206,13 @@ function langFallbackLabel(filePath: string): string {
   background: rgba(129, 140, 248, 0.04);
 }
 
-/* 语言官方 Logo 图标：Iconify 渲染的 SVG，保持清晰锐利 */
+/* 语言 Logo */
 .file-lang-icon {
   flex-shrink: 0;
   border-radius: 2px;
 }
 
-/* 未匹配图标时的兜底文本标签 */
+/* 兜底文本标签 */
 .file-lang-fallback {
   min-width: 22px;
   height: 16px;
@@ -280,7 +233,7 @@ function langFallbackLabel(filePath: string): string {
 /* 文件路径 */
 .file-path {
   flex: 1;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 460;
   color: #374151;
   font-family: "SF Mono", "Cascadia Code", "Fira Code", monospace;
@@ -298,7 +251,7 @@ function langFallbackLabel(filePath: string): string {
 .file-change-count {
   display: flex;
   gap: 4px;
-  font-size: 11px;
+  font-size: 11.5px;
   font-family: "SF Mono", "Cascadia Code", monospace;
   flex-shrink: 0;
 }
@@ -324,7 +277,7 @@ function langFallbackLabel(filePath: string): string {
   color: #6b7280;
 }
 
-/* ── 展开的 diff 区域 ── */
+/* ── 展开区域 ── */
 .file-diff-expanded {
   border-top: 1px solid rgba(0, 0, 0, 0.04);
   animation: diffExpandIn 0.18s ease;

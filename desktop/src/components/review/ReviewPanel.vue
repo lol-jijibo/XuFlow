@@ -5,6 +5,7 @@ import { useReviewStore } from "../../stores/review";
 import { useThemeStore } from "../../stores/theme";
 import ReviewToolbar from "./ReviewToolbar.vue";
 import ReviewFileList from "./ReviewFileList.vue";
+import ReviewDirTree from "./ReviewDirTree.vue";
 import ReviewActions from "./ReviewActions.vue";
 
 // 右侧代码审查侧边栏主容器，包含文件变更列表与批量操作栏
@@ -41,6 +42,12 @@ const hasChanges = computed(() => store.diffFiles.length > 0);
         </button>
       </div>
 
+      <!-- 工具栏始终可见，保证用户可在任意状态下切换审查范围 -->
+      <ReviewToolbar />
+
+      <!-- 目录树：点击工具栏 📁 按钮切换显示，展示变更文件的目录结构 -->
+      <ReviewDirTree v-if="store.showDirTree && hasChanges" :files="store.diffFiles" />
+
       <!-- 加载状态 -->
       <div v-if="store.loading" class="review-loading">
         <NSpin size="small" />
@@ -63,9 +70,8 @@ const hasChanges = computed(() => store.diffFiles.length > 0);
         <span class="review-empty-hint">修改代码后刷新查看 diff</span>
       </div>
 
-      <!-- 有变更时：工具栏 + 文件列表 + 操作栏 -->
+      <!-- 有变更时：文件列表 + 操作栏 -->
       <template v-else>
-        <ReviewToolbar />
         <div class="review-body">
           <NScrollbar class="review-scroll">
             <ReviewFileList :files="store.diffFiles" />
@@ -93,7 +99,7 @@ const hasChanges = computed(() => store.diffFiles.length > 0);
 }
 
 .review-panel.dark {
-  background: #1a1a20;
+  background: #18181b;
   border-left-color: rgba(255, 255, 255, 0.06);
 }
 
@@ -161,7 +167,7 @@ const hasChanges = computed(() => store.diffFiles.length > 0);
 }
 
 .review-stat {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   font-family: "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
   line-height: 1;

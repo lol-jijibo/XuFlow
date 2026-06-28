@@ -49,6 +49,8 @@ pub fn run() {
             commands::git::git_reset_file,
             commands::git::git_checkout_file,
             commands::git::git_checkout_all,
+            commands::git::reveal_in_explorer,
+            commands::git::get_working_dir,
             // 数据库路径
             commands::persistence::db_get_path,
             // 数据库连接管理

@@ -12,9 +12,9 @@ const themeStore = useThemeStore();
 const reviewStore = useReviewStore();
 
 // 审查侧边栏可拖拽调整宽度，拖动对话区域与侧边栏之间的分隔线即可改变宽度
-const reviewPanelWidth = ref(320);
-const MIN_PANEL_WIDTH = 240;
-const MAX_PANEL_WIDTH = 600;
+const reviewPanelWidth = ref(360);
+const MIN_PANEL_WIDTH = 280;
+const MAX_PANEL_WIDTH = 900;
 
 const isDragging = ref(false);
 let dragStartX = 0;

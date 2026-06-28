@@ -99,6 +99,69 @@ pub async fn git_checkout_file(path: String) -> Result<String, String> {
     }
 }
 
+/// 返回当前工作目录（即 git 仓库根目录）
+#[tauri::command]
+pub async fn get_working_dir() -> Result<String, String> {
+    std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .map_err(|e| format!("获取工作目录失败: {}", e))
+}
+
+/// 在系统文件管理器中定位并选中指定文件或打开目录
+#[tauri::command]
+pub async fn reveal_in_explorer(path: String) -> Result<String, String> {
+    let p = std::path::Path::new(&path);
+    #[cfg(target_os = "windows")]
+    {
+        if p.is_dir() {
+            // 目录：直接打开
+            Command::new("explorer")
+                .arg(&path)
+                .spawn()
+                .map_err(|e| format!("打开资源管理器失败: {}", e))?;
+        } else {
+            // 文件：在资源管理器中选中
+            Command::new("explorer")
+                .args(["/select,", &path])
+                .spawn()
+                .map_err(|e| format!("打开资源管理器失败: {}", e))?;
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if p.is_dir() {
+            Command::new("open")
+                .arg(&path)
+                .spawn()
+                .map_err(|e| format!("打开 Finder 失败: {}", e))?;
+        } else {
+            Command::new("open")
+                .args(["-R", &path])
+                .spawn()
+                .map_err(|e| format!("打开 Finder 失败: {}", e))?;
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if p.is_dir() {
+            Command::new("xdg-open")
+                .arg(&path)
+                .spawn()
+                .map_err(|e| format!("打开文件管理器失败: {}", e))?;
+        } else {
+            let parent = std::path::Path::new(&path)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.clone());
+            Command::new("xdg-open")
+                .arg(&parent)
+                .spawn()
+                .map_err(|e| format!("打开文件管理器失败: {}", e))?;
+        }
+    }
+    Ok(format!("已定位: {}", path))
+}
+
 /// 回退所有未暂存的变更
 #[tauri::command]
 pub async fn git_checkout_all() -> Result<String, String> {

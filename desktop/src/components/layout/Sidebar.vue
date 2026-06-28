@@ -524,21 +524,69 @@ function handleNewConversation() {
 </template>
 
 <style scoped>
+/* ═══════════════════════════════════════════
+   侧边栏双模式设计
+   浅色 — HelloKitty 暖粉底衬 (#fef0f3)
+   深色 — 暖灰基底 + 粉色系环境微光 + 毛玻璃悬浮
+   ═══════════════════════════════════════════ */
 .sidebar {
   width: 260px;
   min-width: 260px;
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: #fafafa;
+  background: #fef0f3;
   border-right: 1px solid rgba(0, 0, 0, 0.06);
   user-select: none;
+  position: relative;
+  overflow: hidden;
   transition: background-color 0.3s ease, border-color 0.3s ease;
 }
 
+/* 深色模式：暖灰基底带微量玫瑰底色，靠色温本身营造氛围，不加光斑 */
 .sidebar.dark {
-  background: #1a1a20;
-  border-right-color: rgba(255, 255, 255, 0.06);
+  background: #1f1c1d;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* 顶部区块（新会话 + 项目标题）：毛玻璃悬浮 */
+.new-conv-section,
+.project-header {
+  position: relative;
+  z-index: 1;
+}
+
+.sidebar.dark .new-conv-section {
+  background: rgba(255, 240, 245, 0.03);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(255, 220, 230, 0.05);
+}
+
+.sidebar.dark .project-header {
+  background: rgba(255, 240, 245, 0.025);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* 底部设置区：毛玻璃悬浮 */
+.sidebar-bottom {
+  position: relative;
+  z-index: 1;
+  padding: 6px 10px;
+}
+
+.sidebar.dark .sidebar-bottom {
+  background: rgba(255, 240, 245, 0.03);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-top: 1px solid rgba(255, 220, 230, 0.05);
+}
+
+/* 项目列表滚动区：透出带光晕的基底 */
+.sidebar.dark .project-list-scroll {
+  position: relative;
+  z-index: 0;
 }
 
 /* Shared divider */
@@ -550,7 +598,7 @@ function handleNewConversation() {
 }
 
 .sidebar.dark .sidebar-divider {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 /* Inline create */

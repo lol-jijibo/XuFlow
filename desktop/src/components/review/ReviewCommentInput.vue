@@ -116,7 +116,7 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 .dark .comment-input-card {
-  background: #1e1e26;
+  background: #1c1c1f;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
 }
 
@@ -192,14 +192,14 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 .dark .comment-textarea {
-  background: #12121a;
+  background: #141417;
   border-color: rgba(255, 255, 255, 0.08);
   color: #e5e7eb;
 }
 
 .dark .comment-textarea:focus {
   border-color: #818cf8;
-  background: #12121a;
+  background: #141417;
 }
 
 .comment-input-footer {

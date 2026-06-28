@@ -18,6 +18,65 @@ export const useReviewStore = defineStore("review", () => {
   const loading = ref(false);
   const error = ref<string | null>(null);
 
+  /** 全部文件折叠/展开 */
+  const collapseAll = ref(false);
+  /** 目录树展示开关 */
+  const showDirTree = ref(false);
+  /** 当前导航定位的文件路径 */
+  const activeFilePath = ref<string | null>(null);
+
+  function toggleCollapseAll() {
+    collapseAll.value = !collapseAll.value;
+  }
+
+  function toggleDirTree() {
+    showDirTree.value = !showDirTree.value;
+  }
+
+  function setActiveFile(path: string | null) {
+    activeFilePath.value = path;
+  }
+
+  /** 在系统文件管理器中定位文件 */
+  async function revealInExplorer(filePath: string) {
+    const root = await resolveProjectRoot();
+    if (!root) return;
+    const absolutePath = root.replace(/\\/g, "/") + "/" + filePath;
+    try {
+      await invoke("reveal_in_explorer", { path: absolutePath });
+    } catch (e) {
+      console.error("[review] revealInExplorer error:", e);
+      error.value = String(e);
+    }
+  }
+
+  /** 在系统文件管理器中打开项目根目录 */
+  async function openProjectDir() {
+    const root = await resolveProjectRoot();
+    if (!root) return;
+    try {
+      await invoke("reveal_in_explorer", { path: root });
+    } catch (e) {
+      console.error("[review] openProjectDir error:", e);
+      error.value = String(e);
+    }
+  }
+
+  /** 获取项目根目录：优先用 store 中的 path，fallback 到 Rust 工作目录 */
+  async function resolveProjectRoot(): Promise<string | null> {
+    const { useProjectStore } = await import("./project");
+    const projectStore = useProjectStore();
+    if (projectStore.activeProject?.path) {
+      return projectStore.activeProject.path;
+    }
+    try {
+      return await invoke<string>("get_working_dir");
+    } catch {
+      error.value = "无法获取项目根目录";
+      return null;
+    }
+  }
+
   /** 按状态分组的文件列表 */
   const stagedFiles = computed(() => diffFiles.value.filter((f) => f.status !== "deleted"));
   const deletedFiles = computed(() => diffFiles.value.filter((f) => f.status === "deleted"));
@@ -218,6 +277,13 @@ ${diffSummary}
     totalDeletions,
     loading,
     error,
+    // 折叠 & 文件导航
+    collapseAll,
+    toggleCollapseAll,
+    showDirTree,
+    toggleDirTree,
+    activeFilePath,
+    setActiveFile,
     // 暂存
     stagedPaths,
     isPathStaged,
@@ -236,5 +302,7 @@ ${diffSummary}
     revertAll,
     buildReviewPrompt,
     addComment,
+    revealInExplorer,
+    openProjectDir,
   };
 });

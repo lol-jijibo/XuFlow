@@ -83,26 +83,45 @@ function lineNumber(line: DiffLine, side: "old" | "new"): string {
 </template>
 
 <style scoped>
+/* ═══════════════════════════════════════════
+   Diff Hunk 代码展示区：模拟 IDE 编辑器观感
+   浅色模式 — 亮白底 + 深色文字高亮
+   深色模式 — 暗色底 + 浅色文字高亮
+   ═══════════════════════════════════════════ */
+
 .diff-hunk {
   font-family: "SF Mono", "Cascadia Code", "Fira Code", "JetBrains Mono", monospace;
   font-size: 12px;
-  line-height: 1.55;
+  line-height: 1.6;
+  /* 代码区专属底衬：浅灰白，与面板 #fafafa 形成卡片层次 */
+  background: #fcfcfc;
+  border-radius: 6px;
+  margin: 6px 8px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.dark .diff-hunk {
+  /* 深灰黑底衬，模拟 IDE 暗色编辑器 */
+  background: #121214;
+  border-color: rgba(255, 255, 255, 0.06);
 }
 
 /* ── Hunk 头部 ── */
 .hunk-header {
-  padding: 4px 8px;
+  padding: 5px 10px;
   font-size: 11px;
-  color: #6366f1;
-  background: rgba(99, 102, 241, 0.04);
-  border-radius: 0;
+  color: #475569;
+  background: rgba(0, 0, 0, 0.03);
   user-select: text;
   cursor: default;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
 }
 
 .dark .hunk-header {
-  color: #a5b4fc;
-  background: rgba(129, 140, 248, 0.05);
+  color: #94a3b8;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom-color: rgba(255, 255, 255, 0.04);
 }
 
 /* ── 代码行 ── */
@@ -110,27 +129,32 @@ function lineNumber(line: DiffLine, side: "old" | "new"): string {
   display: flex;
   align-items: flex-start;
   gap: 0;
-  padding: 0 4px;
-  min-height: 20px;
+  padding: 0 6px;
+  min-height: 22px;
   position: relative;
-  transition: background 0.1s ease;
 }
 
-.diff-line:hover {
-  filter: brightness(0.96);
+/* hover 时用 ::after 叠加半透明遮罩代替 filter，避免 GPU 合成层导致文字模糊 */
+.diff-line:hover::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.03);
+  pointer-events: none;
+  z-index: 0;
 }
 
-.dark .diff-line:hover {
-  filter: brightness(1.1);
+.dark .diff-line:hover::after {
+  background: rgba(255, 255, 255, 0.04);
 }
 
-/* 行背景色 */
+/* ── 行背景色：模拟 IDE diff 视图 ── */
 .line-add {
-  background: rgba(34, 197, 94, 0.08);
+  background: rgba(34, 197, 94, 0.1);
 }
 
 .line-remove {
-  background: rgba(239, 68, 68, 0.06);
+  background: rgba(239, 68, 68, 0.08);
 }
 
 .line-context {
@@ -138,42 +162,40 @@ function lineNumber(line: DiffLine, side: "old" | "new"): string {
 }
 
 .line-header {
-  background: rgba(99, 102, 241, 0.04);
+  background: rgba(0, 0, 0, 0.03);
 }
 
 .dark .line-add {
-  background: rgba(34, 197, 94, 0.1);
+  background: rgba(34, 197, 94, 0.12);
 }
 
 .dark .line-remove {
-  background: rgba(239, 68, 68, 0.08);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.dark .line-context {
+  background: transparent;
 }
 
 .dark .line-header {
-  background: rgba(129, 140, 248, 0.05);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 /* ── 行号 ── */
 .line-no {
-  width: 36px;
+  width: 38px;
   flex-shrink: 0;
   text-align: right;
-  padding-right: 8px;
+  padding-right: 10px;
   font-size: 11px;
-  color: #9ca3af;
+  color: #b0b0b0;
   user-select: none;
-}
-
-.line-no:hover {
-  color: #6366f1;
+  position: relative;
+  z-index: 1;
 }
 
 .dark .line-no {
-  color: #6b7280;
-}
-
-.dark .line-no:hover {
-  color: #a5b4fc;
+  color: #484f58;
 }
 
 /* ── 行前缀（+/-/ ） ── */
@@ -184,16 +206,18 @@ function lineNumber(line: DiffLine, side: "old" | "new"): string {
   font-weight: 600;
   font-size: 11px;
   user-select: none;
+  position: relative;
+  z-index: 1;
 }
 
 .line-add .line-prefix { color: #16a34a; }
 .line-remove .line-prefix { color: #dc2626; }
 .line-context .line-prefix { color: transparent; }
 
-.dark .line-add .line-prefix { color: #4ade80; }
-.dark .line-remove .line-prefix { color: #f87171; }
+.dark .line-add .line-prefix { color: #3fb950; }
+.dark .line-remove .line-prefix { color: #f85149; }
 
-/* ── 高亮代码内容 ── */
+/* ── 代码内容区 ── */
 .line-content {
   flex: 1;
   min-width: 0;
@@ -201,11 +225,188 @@ function lineNumber(line: DiffLine, side: "old" | "new"): string {
   word-break: break-all;
   overflow-wrap: break-word;
   padding-left: 4px;
+  position: relative;
+  z-index: 1;
+  color: #1f2328;
+}
+
+.dark .line-content {
+  color: #e6edf3;
 }
 
 /* highlight.js 渲染的 span 保持 diff 背景透明 */
 .line-content :deep(span) {
   background: transparent !important;
+}
+
+/* ═══════════════════════════════════════════
+   语法高亮配色 — 浅色模式（GitHub light 风格）
+   ═══════════════════════════════════════════ */
+
+/* 关键字：if/else/return/function/class/const/let/import/export 等 */
+.line-content :deep(.hljs-keyword),
+.line-content :deep(.hljs-selector-tag),
+.line-content :deep(.hljs-literal) {
+  color: #cf222e;
+}
+
+/* 字符串 */
+.line-content :deep(.hljs-string),
+.line-content :deep(.hljs-addition) {
+  color: #0a3069;
+}
+
+/* 数字 */
+.line-content :deep(.hljs-number) {
+  color: #0550ae;
+}
+
+/* 注释 */
+.line-content :deep(.hljs-comment),
+.line-content :deep(.hljs-quote) {
+  color: #6e7781;
+  font-style: italic;
+}
+
+/* 函数名 / 类名 / 标题 */
+.line-content :deep(.hljs-title),
+.line-content :deep(.hljs-title.function_),
+.line-content :deep(.hljs-title.class_),
+.line-content :deep(.hljs-type) {
+  color: #6639ba;
+}
+
+/* 内置函数 / 内置类型 */
+.line-content :deep(.hljs-built_in),
+.line-content :deep(.hljs-symbol) {
+  color: #0550ae;
+}
+
+/* 模板字符串变量 */
+.line-content :deep(.hljs-variable),
+.line-content :deep(.hljs-template-variable) {
+  color: #953800;
+}
+
+/* 正则表达式 */
+.line-content :deep(.hljs-regexp) {
+  color: #0a3069;
+}
+
+/* 属性 / 参数 */
+.line-content :deep(.hljs-attr),
+.line-content :deep(.hljs-attribute),
+.line-content :deep(.hljs-params) {
+  color: #8250df;
+}
+
+/* 标签名 */
+.line-content :deep(.hljs-name) {
+  color: #116329;
+}
+
+/* 元数据 / 装饰器 */
+.line-content :deep(.hljs-meta) {
+  color: #6e7781;
+}
+
+/* 删除 / 插入标记 */
+.line-content :deep(.hljs-deletion) {
+  color: #cf222e;
+}
+
+/* 选择器 */
+.line-content :deep(.hljs-selector-id),
+.line-content :deep(.hljs-selector-class),
+.line-content :deep(.hljs-selector-attr),
+.line-content :deep(.hljs-selector-pseudo) {
+  color: #6639ba;
+}
+
+/* 强调 */
+.line-content :deep(.hljs-emphasis) {
+  font-style: italic;
+}
+.line-content :deep(.hljs-strong) {
+  font-weight: 600;
+}
+
+/* ═══════════════════════════════════════════
+   语法高亮配色 — 深色模式（GitHub dark 风格）
+   ═══════════════════════════════════════════ */
+
+.dark .line-content :deep(.hljs-keyword),
+.dark .line-content :deep(.hljs-selector-tag),
+.dark .line-content :deep(.hljs-literal) {
+  color: #ff7b72;
+}
+
+.dark .line-content :deep(.hljs-string),
+.dark .line-content :deep(.hljs-addition) {
+  color: #a5d6ff;
+}
+
+.dark .line-content :deep(.hljs-number) {
+  color: #79c0ff;
+}
+
+.dark .line-content :deep(.hljs-comment),
+.dark .line-content :deep(.hljs-quote) {
+  color: #8b949e;
+  font-style: italic;
+}
+
+.dark .line-content :deep(.hljs-title),
+.dark .line-content :deep(.hljs-title.function_),
+.dark .line-content :deep(.hljs-title.class_),
+.dark .line-content :deep(.hljs-type) {
+  color: #d2a8ff;
+}
+
+.dark .line-content :deep(.hljs-built_in),
+.dark .line-content :deep(.hljs-symbol) {
+  color: #79c0ff;
+}
+
+.dark .line-content :deep(.hljs-variable),
+.dark .line-content :deep(.hljs-template-variable) {
+  color: #ffa657;
+}
+
+.dark .line-content :deep(.hljs-regexp) {
+  color: #a5d6ff;
+}
+
+.dark .line-content :deep(.hljs-attr),
+.dark .line-content :deep(.hljs-attribute),
+.dark .line-content :deep(.hljs-params) {
+  color: #d2a8ff;
+}
+
+.dark .line-content :deep(.hljs-name) {
+  color: #7ee787;
+}
+
+.dark .line-content :deep(.hljs-meta) {
+  color: #8b949e;
+}
+
+.dark .line-content :deep(.hljs-deletion) {
+  color: #ff7b72;
+}
+
+.dark .line-content :deep(.hljs-selector-id),
+.dark .line-content :deep(.hljs-selector-class),
+.dark .line-content :deep(.hljs-selector-attr),
+.dark .line-content :deep(.hljs-selector-pseudo) {
+  color: #d2a8ff;
+}
+
+.dark .line-content :deep(.hljs-emphasis) {
+  font-style: italic;
+}
+.dark .line-content :deep(.hljs-strong) {
+  font-weight: 600;
 }
 
 /* ── 行评论计数徽章 ── */
@@ -222,6 +423,8 @@ function lineNumber(line: DiffLine, side: "old" | "new"): string {
   font-weight: 600;
   flex-shrink: 0;
   margin-left: 4px;
+  position: relative;
+  z-index: 1;
 }
 
 .dark .line-comment-count {
