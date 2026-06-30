@@ -226,28 +226,23 @@ test("MessageItem keeps status text inside the assistant text flow instead of de
   );
   assert.match(
     source,
-    /Brewing a reply\.\.\./,
-    "assistant flow should include the brewing prompt in the rotation"
+    /思考中\.\.\./,
+    "assistant flow should include a localized thinking prompt in the rotation"
   );
   assert.match(
     source,
-    /Putting it together\.\.\./,
-    "assistant flow should include the assembly prompt in the rotation"
+    /整理回答中\.\.\./,
+    "assistant flow should include a localized assembly prompt in the rotation"
   );
   assert.match(
     source,
-    /Drafting it\.\.\./,
-    "assistant flow should include the drafting prompt in the rotation"
+    /组织语言中\.\.\./,
+    "assistant flow should include a localized drafting prompt in the rotation"
   );
   assert.match(
     source,
-    /Polishing the words\.\.\./,
-    "assistant flow should include the polishing prompt in the rotation"
-  );
-  assert.match(
-    source,
-    /Cooking up an answer\.\.\./,
-    "assistant flow should include the playful cooking prompt in the rotation"
+    /生成回复中\.\.\./,
+    "assistant flow should include a localized generation prompt in the rotation"
   );
   assert.match(
     source,
@@ -256,8 +251,8 @@ test("MessageItem keeps status text inside the assistant text flow instead of de
   );
   assert.doesNotMatch(
     source,
-    /return "思考中\.\.\."/,
-    "assistant flow should no longer hardcode the old thinking label"
+    /Brewing a reply|Drafting it|Putting it together|Polishing the words|Cooking up an answer|Stitching it up/,
+    "assistant flow should no longer show English loading prompts"
   );
   assert.match(
     source,
@@ -267,7 +262,7 @@ test("MessageItem keeps status text inside the assistant text flow instead of de
   assert.match(
     source,
     /if \(isPromptRotatingPhase\.value\) return activeReasoningPrompt\.value;/,
-    "assistant flow should reuse the rotating English prompts for the full non-tool streaming phase"
+    "assistant flow should reuse the rotating localized prompts for the full non-tool streaming phase"
   );
   assert.match(
     source,

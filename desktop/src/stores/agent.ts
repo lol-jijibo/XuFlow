@@ -112,6 +112,18 @@ export const useAgentStore = defineStore("agent", () => {
       return;
     }
 
+    for (const msg of conv.messages) {
+      if (msg.role === "assistant" && !msg.done) {
+        msg.done = true;
+        if (msg.reasoning && !msg.reasoningDone) {
+          msg.reasoningDone = true;
+        }
+        if (msg.reasoningExpanded === undefined) {
+          msg.reasoningExpanded = false;
+        }
+      }
+    }
+
     conv.messages.push({ role: "user", content, done: true });
     conv.messages.push({ role: "assistant", content: "", done: false });
     conv.updatedAt = Date.now();
@@ -135,11 +147,23 @@ export const useAgentStore = defineStore("agent", () => {
     }
   }
 
+  // 停止生成：通知 Rust 后端取消后，立即更新前端 UI 状态，
+  // 避免等待后端完全结束才切换按钮（造成"点了没反应"的体验）。
   async function stopGeneration() {
     try {
       await invoke("stop_generation");
     } catch (e) {
       console.error("[agent] stop_generation error:", e);
+    }
+    // 立即将 UI 切换回可发送状态，同时标记最后一条助手消息为已完成，
+    // 防止依赖 agent:done 事件（被取消时事件转发器已停止，Done 事件可能丢失）。
+    isRunning.value = false;
+    const conv = useProjectStore().activeConversation;
+    if (conv) {
+      const lastMsg = conv.messages[conv.messages.length - 1];
+      if (lastMsg && lastMsg.role === "assistant" && !lastMsg.done) {
+        lastMsg.done = true;
+      }
     }
   }
 

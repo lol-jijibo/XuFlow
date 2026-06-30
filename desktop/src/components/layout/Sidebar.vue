@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
-import { NButton, NTooltip, NInput, NScrollbar, NDropdown, useMessage } from "naive-ui";
+import { NButton, NTooltip, NInput, NScrollbar, NDropdown, NModal, useMessage } from "naive-ui";
 import { useProjectStore } from "../../stores/project";
 import { useThemeStore } from "../../stores/theme";
 import { open as tauriOpen } from "@tauri-apps/plugin-dialog";
@@ -28,9 +28,9 @@ const contextMenu = ref({
 function onProjectContextMenu(e: MouseEvent, projectId: string) {
   e.preventDefault();
   e.stopPropagation();
-  // 菜单预估尺寸：宽约 150px，每项高约 32px（置顶+删除共 2 项约 72px）
+  // 菜单预估尺寸：宽约 150px，每项高约 32px（重命名+置顶+删除共 3 项约 104px）
   const menuW = 150;
-  const menuH = 80;
+  const menuH = 104;
   let x = e.clientX;
   let y = e.clientY;
   if (x + menuW > window.innerWidth) x = window.innerWidth - menuW - 8;
@@ -50,13 +50,15 @@ function onGlobalClick(_e: MouseEvent) {
   }
 }
 
-/** 处理右键菜单选项：删除项目 / 置顶项目。 */
+/** 处理右键菜单选项：重命名 / 置顶 / 删除。重命名位放置在置顶上方第一位。 */
 function handleContextMenuSelect(key: string) {
   const projectId = contextMenu.value.projectId;
   closeContextMenu();
   if (!projectId) return;
 
-  if (key === "delete") {
+  if (key === "rename") {
+    openRenameDialog(projectId);
+  } else if (key === "delete") {
     const project = store.projects.find((p) => p.id === projectId);
     if (project) {
       store.deleteProject(projectId);
@@ -71,12 +73,16 @@ function handleContextMenuSelect(key: string) {
   }
 }
 
-// 右键菜单选项：根据当前项目置顶状态动态生成。
+// 右键菜单选项：重命名 → 置顶 → 删除，重命名位于置顶上方第一位。
 const contextMenuOptions = computed(() => {
   const project = contextMenu.value.projectId
     ? store.projects.find((p) => p.id === contextMenu.value.projectId)
     : null;
   return [
+    {
+      label: "重命名项目",
+      key: "rename",
+    },
     {
       label: project?.pinned ? "取消置顶" : "置顶项目",
       key: "pin",
@@ -100,9 +106,10 @@ const creatingProject = ref(false);
 const newProjectName = ref("");
 const scrollRef = ref<InstanceType<typeof NScrollbar> | null>(null);
 
-// 重命名状态：项目名和会话名内联编辑
-const renamingProjectId = ref<string | null>(null);
-const renameProjectName = ref("");
+// 重命名状态：项目名使用居中弹窗编辑，会话名使用内联编辑
+const showRenameDialog = ref(false);
+const renameDialogProjectId = ref<string | null>(null);
+const renameDialogName = ref("");
 const renamingConvInfo = ref<{ projectId: string; convId: string } | null>(null);
 const renameConvTitle = ref("");
 
@@ -162,36 +169,39 @@ function cancelCreateProject() {
   newProjectName.value = "";
 }
 
-// ── 项目名重命名（双击触发内联编辑）────────────────────────────
-// 进入编辑模式前先提交另一个类型的编辑，保证最多一个输入框活跃
+// ── 项目名重命名（右键菜单触发居中弹窗编辑）────────────────────────────
+// 弹窗居中显示，输入新名称后按 Enter 或点击确认按钮保存，Esc 或点击遮罩取消。
 
-function startRenameProject(projectId: string) {
-  if (renamingProjectId.value) finishRenameProject();
+/** 打开项目重命名弹窗：预填当前项目名，清空上一次的残留状态。 */
+function openRenameDialog(projectId: string) {
   if (renamingConvInfo.value) finishRenameConversation();
   const project = store.projects.find((p) => p.id === projectId);
   if (!project) return;
-  renamingProjectId.value = projectId;
-  renameProjectName.value = project.name;
+  renameDialogProjectId.value = projectId;
+  renameDialogName.value = project.name;
+  showRenameDialog.value = true;
 }
 
-function finishRenameProject() {
-  const id = renamingProjectId.value;
+/** 确认重命名：非空名称才提交更新，否则静默关闭。 */
+function confirmRenameDialog() {
+  const id = renameDialogProjectId.value;
   if (!id) return;
-  const name = renameProjectName.value.trim();
+  const name = renameDialogName.value.trim();
   if (name) store.updateProjectName(id, name);
-  renamingProjectId.value = null;
-  renameProjectName.value = "";
+  closeRenameDialog();
 }
 
-function cancelRenameProject() {
-  renamingProjectId.value = null;
-  renameProjectName.value = "";
+/** 关闭重命名弹窗：清空状态，丢弃未确认的输入。 */
+function closeRenameDialog() {
+  showRenameDialog.value = false;
+  renameDialogProjectId.value = null;
+  renameDialogName.value = "";
 }
 
 // ── 会话名重命名（双击触发内联编辑）────────────────────────────
 
 function startRenameConversation(projectId: string, convId: string) {
-  if (renamingProjectId.value) finishRenameProject();
+  // 项目重命名使用弹窗，无需检查内联状态
   if (renamingConvInfo.value) finishRenameConversation();
   const project = store.projects.find((p) => p.id === projectId);
   const conv = project?.conversations.find((c) => c.id === convId);
@@ -375,23 +385,8 @@ function handleNewConversation() {
             <svg v-if="project.pinned" width="12" height="12" viewBox="0 0 14 14" fill="none" class="pin-indicator" title="已置顶">
               <path d="M9.5 2L8.3 3.2l.5.5L10 4.8l.5-.5L12 5.5v-6L8.5 3l.5.5-2 2-1.5-1.5L4 5.5l4 4 1.5-1.5-1.5-1.5 2-2z" fill="currentColor" stroke="currentColor" stroke-width="0.8" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
-            <!-- 项目名：双击进入内联重命名，Enter/blur 确认，Escape 取消 -->
-            <span
-              v-if="renamingProjectId !== project.id"
-              class="project-name"
-              @dblclick.stop="startRenameProject(project.id)"
-              title="双击重命名"
-            >{{ project.name }}</span>
-            <NInput
-              v-else
-              v-model:value="renameProjectName"
-              size="small"
-              :autofocus="true"
-              placeholder="项目名称"
-              @keydown.enter="finishRenameProject"
-              @keydown.escape="cancelRenameProject"
-              @blur="finishRenameProject"
-            />
+            <!-- 项目名：右键菜单中重命名 -->
+            <span class="project-name">{{ project.name }}</span>
             <NButton
               v-show="isExpanded(project.id)"
               size="tiny"
@@ -507,6 +502,11 @@ function handleNewConversation() {
             :class="{ danger: opt.key === 'delete' }"
             @click.stop="handleContextMenuSelect(opt.key)"
           >
+            <!-- 重命名图标：铅笔 -->
+            <svg v-if="opt.key === 'rename'" width="14" height="14" viewBox="0 0 14 14" fill="none" class="context-menu-icon">
+              <path d="M10.5 1.5l2 2-9 9H1.5v-2l9-9z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M9 3l2 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+            </svg>
             <!-- 置顶图标：图钉 -->
             <svg v-if="opt.key === 'pin'" width="14" height="14" viewBox="0 0 14 14" fill="none" class="context-menu-icon">
               <path d="M9.5 2L8.3 3.2l.5.5L10 4.8l.5-.5L12 5.5v-6L8.5 3l.5.5-2 2-1.5-1.5L4 5.5l4 4 1.5-1.5-1.5-1.5 2-2z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -520,6 +520,34 @@ function handleNewConversation() {
         </div>
       </div>
     </Teleport>
+
+    <!-- 项目重命名弹窗：居中显示，匹配当前桌面端视觉风格 -->
+    <NModal
+      :show="showRenameDialog"
+      @update:show="(v) => { if (!v) closeRenameDialog(); }"
+      :mask-closable="true"
+      transform-origin="center"
+    >
+      <div class="rename-dialog" :class="{ dark: themeStore.isDark }">
+        <div class="rename-dialog-header">
+          <span class="rename-dialog-title">重命名项目</span>
+        </div>
+        <div class="rename-dialog-body">
+          <NInput
+            v-model:value="renameDialogName"
+            size="large"
+            placeholder="输入项目名称"
+            :autofocus="true"
+            @keydown.enter="confirmRenameDialog"
+            @keydown.escape="closeRenameDialog"
+          />
+        </div>
+        <div class="rename-dialog-footer">
+          <NButton quaternary size="medium" @click="closeRenameDialog">取消</NButton>
+          <NButton type="primary" size="medium" @click="confirmRenameDialog">确认</NButton>
+        </div>
+      </div>
+    </NModal>
   </div>
 </template>
 
@@ -1037,4 +1065,80 @@ function handleNewConversation() {
 .context-menu-icon {
   flex-shrink: 0;
 }
+
+/* ── 项目重命名居中弹窗：匹配桌面端视觉风格，亮暗双模式 ── */
+
+/* NModal 遮罩层微调 */
+:deep(.n-modal-mask) {
+  backdrop-filter: blur(2px);
+}
+
+/* 弹窗卡片：胶囊圆角 + 微凸起阴影，亮暗模式下层次分开 */
+.rename-dialog {
+  width: 380px;
+  max-width: calc(100vw - 48px);
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 16px;
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.1),
+    0 2px 8px rgba(0, 0, 0, 0.04);
+  padding: 0;
+  overflow: hidden;
+}
+
+.rename-dialog.dark {
+  background: #25252b;
+  border-color: rgba(255, 255, 255, 0.06);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.5),
+    0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* 弹窗头部：标题行 */
+.rename-dialog-header {
+  padding: 16px 20px 0;
+}
+
+.rename-dialog-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1a1a1a;
+  letter-spacing: -0.01em;
+}
+
+.rename-dialog.dark .rename-dialog-title {
+  color: #e8e8ed;
+}
+
+/* 弹窗主体：输入框区域 */
+.rename-dialog-body {
+  padding: 16px 20px;
+}
+
+.rename-dialog-body :deep(.n-input) {
+  --n-border: 1px solid rgba(0, 0, 0, 0.1);
+  --n-border-radius: 10px;
+}
+
+.rename-dialog.dark .rename-dialog-body :deep(.n-input) {
+  --n-border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* 弹窗底部：按钮组右对齐 */
+.rename-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 20px 16px;
+}
+
+/* Naive UI NModal 内容容器居中偏移修正 */
+:deep(.n-modal) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* NDropdown / NSelect 下拉菜单视觉样式统一由 App.vue 全局样式控制（Naive UI Teleport 到 body，scoped 穿透无效） */
 </style>

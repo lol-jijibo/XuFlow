@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, onMounted, onUnmounted, computed } from "vue";
+import { ref, nextTick, watch, onMounted, onUnmounted, onBeforeUpdate, computed } from "vue";
 import { NInput, NScrollbar, NSelect, useMessage } from "naive-ui";
 import MessageItem from "./MessageItem.vue";
 import TodoPanel from "./TodoPanel.vue";
 import PlanApprovalCard from "../approval/PlanApprovalCard.vue";
 import { useAgentStore } from "../../stores/agent";
 import { useThemeStore } from "../../stores/theme";
-import { useConfigStore } from "../../stores/config";
+import { ALL_MODELS, useConfigStore } from "../../stores/config";
 import { useProjectStore } from "../../stores/project";
 import { useTauriEvent } from "../../composables/useTauriEvent";
 import { useReviewStore } from "../../stores/review";
@@ -61,55 +61,249 @@ const contextWindow = computed(() => store.contextWindow);
 
 const isEmpty = computed(() => store.messages.length === 0);
 const canSend = computed(() => inputText.value.trim().length > 0);
+const selectableModelIds = computed(() => ALL_MODELS.map((model) => model.value));
 
-// ── Smooth wheel scrolling ──
-function smoothWheelHandler(e: WheelEvent) {
-  // Only smooth vertical scrolling; let horizontal/shift-wheel pass through
+const activeStreamingMessageIndex = computed(() => {
+  for (let i = store.messages.length - 1; i >= 0; i -= 1) {
+    const msg = store.messages[i];
+    if (msg.role === "assistant" && !msg.done) return i;
+  }
+  return -1;
+});
+
+let modelWheelLastAt = 0;
+function handleModelWheel(e: WheelEvent) {
   if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
 
   e.preventDefault();
-  const target = e.currentTarget as HTMLElement;
-  target.scrollBy({
-    top: e.deltaY,
-    left: 0,
-    behavior: "smooth",
-  });
+  e.stopPropagation();
+
+  const now = Date.now();
+  if (now - modelWheelLastAt < 120) return;
+  modelWheelLastAt = now;
+
+  const ids = selectableModelIds.value;
+  if (ids.length === 0) return;
+
+  const currentIndex = ids.indexOf(configStore.activeModelId);
+  const fallbackIndex = currentIndex === -1 ? 0 : currentIndex;
+  const direction = e.deltaY > 0 ? 1 : -1;
+  const nextIndex = (fallbackIndex + direction + ids.length) % ids.length;
+  configStore.activeModelId = ids[nextIndex];
 }
 
-function attachSmoothScroll() {
-  // Find the scrollable content container inside NScrollbar
-  const container = scrollRef.value?.$el as HTMLElement | undefined;
-  if (!container) return;
-  const scrollContent = container.querySelector(".n-scrollbar-container") as HTMLElement | null;
-  if (scrollContent) {
-    scrollContent.addEventListener("wheel", smoothWheelHandler, { passive: false });
+// ── 滚动位置记忆：按会话 ID 记住用户停留的滚动位置 ──
+// 切换会话时保存旧位置、恢复新位置；用户滚动时持续追踪当前位置。
+// 仅在当前会话收到新消息时才自动滚到底部，切换会话时保持之前的位置。
+const SCROLL_POSITIONS_STORAGE_KEY = "xuflow-conversation-scroll-top-v1";
+
+function loadScrollPositions(): Map<string, number> {
+  try {
+    const raw = localStorage.getItem(SCROLL_POSITIONS_STORAGE_KEY);
+    if (!raw) return new Map();
+    const entries = JSON.parse(raw);
+    if (!Array.isArray(entries)) return new Map();
+    return new Map(
+      entries.filter(
+        (entry): entry is [string, number] =>
+          Array.isArray(entry) &&
+          typeof entry[0] === "string" &&
+          typeof entry[1] === "number"
+      )
+    );
+  } catch (e) {
+    console.error("[chat] Failed to load scroll positions:", e);
+    return new Map();
   }
+}
+
+function persistScrollPositions() {
+  try {
+    localStorage.setItem(
+      SCROLL_POSITIONS_STORAGE_KEY,
+      JSON.stringify([...scrollPositions.value.entries()])
+    );
+  } catch (e) {
+    console.error("[chat] Failed to save scroll positions:", e);
+  }
+}
+
+const scrollPositions = ref<Map<string, number>>(loadScrollPositions());
+let restoringScrollFor: string | null = null;
+let restoreScrollTimer: ReturnType<typeof setTimeout> | null = null;
+let renderedConversationId: string | null = projectStore.activeConversationId;
+
+/** 获取 NScrollbar 内部实际滚动的容器元素。 */
+function getScrollElement(): HTMLElement | null {
+  const container = scrollRef.value?.$el as HTMLElement | undefined;
+  if (!container) return null;
+  return (
+    container.querySelector(".n-scrollbar-container") ??
+    container.querySelector(".n-scrollbar-content") ??
+    container
+  ) as HTMLElement | null;
+}
+
+function getCurrentScrollTop(el = getScrollElement()): number | null {
+  const scrollbar = scrollRef.value as any;
+  if (typeof scrollbar?.containerScrollTop === "number") {
+    return scrollbar.containerScrollTop;
+  }
+  if (!el) return null;
+  return el.scrollTop;
+}
+
+function getMaxScrollTop(el = getScrollElement()): number {
+  if (!el) return 0;
+  return Math.max(0, el.scrollHeight - el.clientHeight);
+}
+
+function scrollChatTo(top: number) {
+  scrollRef.value?.scrollTo({ top, behavior: "auto" });
+  const el = getScrollElement();
+  if (el) {
+    el.scrollTop = top;
+  }
+}
+
+/** 将指定会话的滚动位置保存到 Map 中，用于下次切回时恢复。 */
+function saveCurrentScrollPosition(
+  convId = projectStore.activeConversationId,
+  el = getScrollElement()
+) {
+  if (!convId) return;
+  if (restoringScrollFor === convId) return;
+  const scrollTop = getCurrentScrollTop(el);
+  if (scrollTop === null) return;
+  scrollPositions.value.set(convId, scrollTop);
+  persistScrollPositions();
+}
+
+function clearPendingScrollSave() {
+  if (!scrollTrackTimer) return;
+  clearTimeout(scrollTrackTimer);
+  scrollTrackTimer = null;
+}
+
+function applyScrollPosition(convId: string, fallbackToBottom: boolean) {
+  const el = getScrollElement();
+  if (!el) return false;
+
+  const savedTop = scrollPositions.value.get(convId);
+  if (savedTop !== undefined) {
+    const maxTop = getMaxScrollTop(el);
+    scrollChatTo(Math.min(Math.max(0, savedTop), maxTop));
+  } else if (fallbackToBottom) {
+    scrollChatTo(el.scrollHeight);
+  }
+
+  return true;
+}
+
+function restoreConversationScroll(convId = projectStore.activeConversationId, fallbackToBottom = true) {
+  if (!convId) return;
+  if (restoreScrollTimer) {
+    clearTimeout(restoreScrollTimer);
+    restoreScrollTimer = null;
+  }
+
+  restoringScrollFor = convId;
+  let attempt = 0;
+  const delays = [0, 16, 32, 80, 160, 320];
+
+  const run = () => {
+    if (projectStore.activeConversationId !== convId) {
+      if (restoringScrollFor === convId) restoringScrollFor = null;
+      clearPendingScrollSave();
+      return;
+    }
+
+    renderedConversationId = convId;
+    clearPendingScrollSave();
+    applyScrollPosition(convId, fallbackToBottom);
+
+    attempt += 1;
+    if (attempt < delays.length) {
+      restoreScrollTimer = setTimeout(run, delays[attempt]);
+      return;
+    }
+
+    restoreScrollTimer = null;
+    clearPendingScrollSave();
+    if (restoringScrollFor === convId) restoringScrollFor = null;
+  };
+
+  nextTick(run);
+}
+
+/** 持续追踪滚动位置（停止滚动后保存），保证记录的是用户真正停留的位置。 */
+let scrollTrackTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleScrollSave(convId: string | null, scrollTop: number | null) {
+  // 没有活跃会话时不追踪滚动位置（例如 DOM 切换过渡期间）
+  if (!convId) return;
+  if (restoringScrollFor === convId) return;
+  if (scrollTop === null) return;
+  clearPendingScrollSave();
+  scrollTrackTimer = setTimeout(() => {
+    scrollTrackTimer = null;
+    if (!convId) return;
+    scrollPositions.value.set(convId, scrollTop);
+    persistScrollPositions();
+  }, 220);
+}
+
+function handleChatScroll(e: Event) {
+  const target = e.target as HTMLElement | null;
+  const top = typeof target?.scrollTop === "number" ? target.scrollTop : getCurrentScrollTop();
+  scheduleScrollSave(renderedConversationId, top);
+}
+
+function persistCurrentScrollBeforeUnload() {
+  saveCurrentScrollPosition(renderedConversationId, getScrollElement());
 }
 
 onMounted(() => {
   setupListeners();
+  renderedConversationId = projectStore.activeConversationId;
+  window.addEventListener("beforeunload", persistCurrentScrollBeforeUnload);
+  window.addEventListener("pagehide", persistCurrentScrollBeforeUnload);
   // Push current credentials to the Rust backend on mount
   store.configureAgent();
   // Attach smooth scrolling once the scrollbar is rendered
-  nextTick(() => attachSmoothScroll());
+  nextTick(() => {
+    restoreConversationScroll();
+  });
+});
+
+onBeforeUpdate(() => {
+  const activeId = projectStore.activeConversationId;
+  if (renderedConversationId && renderedConversationId !== activeId) {
+    const currentScrollEl = getScrollElement();
+    clearPendingScrollSave();
+    saveCurrentScrollPosition(renderedConversationId, currentScrollEl);
+    // 将会话追踪 ID 置空，防止 DOM 切换期间（消息内容替换导致
+    // 滚动容器高度变化时）触发的 scroll 事件把位置错误写入旧会话。
+    renderedConversationId = null;
+  }
 });
 
 onUnmounted(() => {
+  saveCurrentScrollPosition(renderedConversationId, getScrollElement());
+  window.removeEventListener("beforeunload", persistCurrentScrollBeforeUnload);
+  window.removeEventListener("pagehide", persistCurrentScrollBeforeUnload);
   teardownListeners();
-  // Clean up wheel listener
-  const container = scrollRef.value?.$el as HTMLElement | undefined;
-  if (container) {
-    const scrollContent = container.querySelector(".n-scrollbar-container") as HTMLElement | null;
-    if (scrollContent) {
-      scrollContent.removeEventListener("wheel", smoothWheelHandler);
-    }
-  }
+  // Clean up pending scroll timers
+  if (scrollTrackTimer) clearTimeout(scrollTrackTimer);
+  if (restoreScrollTimer) clearTimeout(restoreScrollTimer);
 });
 
 // Re-attach smooth scroll handler when the scrollbar appears (first message)
 watch(isEmpty, (empty) => {
   if (!empty) {
-    nextTick(() => attachSmoothScroll());
+    nextTick(() => {
+      restoreConversationScroll();
+    });
   }
 });
 
@@ -170,7 +364,7 @@ async function sendMessage() {
   } finally {
     sending.value = false;
     nextTick(() => {
-      scrollRef.value?.scrollTo({ top: 99999, behavior: "smooth" });
+      scrollChatTo(getScrollElement()?.scrollHeight ?? 99999);
     });
   }
 }
@@ -179,13 +373,42 @@ function handleStop() {
   store.stopGeneration();
 }
 
+// ── 会话切换时保存/恢复滚动位置 ──
+// 切走时记住当前位置，切回时恢复；没有历史位置则默认滚到底部。
 watch(
-  () => store.messages.length,
-  () => {
+  () => projectStore.activeConversationId,
+  (newId, oldId) => {
+    if (oldId) {
+      const oldScrollEl = getScrollElement();
+      clearPendingScrollSave();
+      saveCurrentScrollPosition(oldId, oldScrollEl);
+    }
+    if (newId) {
+      restoreConversationScroll(newId);
+    } else {
+      renderedConversationId = null;
+    }
+  },
+  { flush: "pre", immediate: true }
+);
+
+// 仅在当前会话收到新消息时自动滚到底部（排除切换会话导致的 length 变化）
+watch(
+  () => [projectStore.activeConversationId, store.messages.length] as const,
+  ([convId, length], [oldConvId, oldLength]) => {
+    if (!convId) return;
+    if (convId !== oldConvId) return;
+    if (restoringScrollFor === convId) return;
+    if (length <= oldLength) return;
+    if (!store.isRunning && !sending.value) {
+      restoreConversationScroll(convId, false);
+      return;
+    }
     nextTick(() => {
-      scrollRef.value?.scrollTo({ top: 99999, behavior: "smooth" });
+      scrollChatTo(getScrollElement()?.scrollHeight ?? 99999);
     });
-  }
+  },
+  { flush: "post" }
 );
 </script>
 
@@ -219,7 +442,11 @@ watch(
 
     <!-- Chat body: keep the footer overlay full width while sharing one centered content width -->
     <div v-else class="chat-body">
-      <NScrollbar ref="scrollRef" class="chat-scroll">
+      <NScrollbar
+        ref="scrollRef"
+        class="chat-scroll"
+        @scroll="handleChatScroll"
+      >
         <div class="chat-content-shell max-w-4xl mx-auto">
           <div class="message-list">
             <!-- Structured overlays: plan approval + todo list -->
@@ -229,6 +456,7 @@ watch(
               v-for="(msg, i) in store.messages"
               :key="i"
               :message="msg"
+              :active-streaming="store.isRunning && i === activeStreamingMessageIndex"
             />
           </div>
         </div>
@@ -285,7 +513,7 @@ watch(
         <div class="chat-footbar">
               <!-- Left: model selector — plain text label over transparent NSelect -->
               <div class="footbar-left">
-                <div class="model-select-wrap">
+                <div class="model-select-wrap" @wheel.capture="handleModelWheel">
                   <span class="model-name-label" :class="{ 'model-switch-pulse': modelSwitchAnim }">{{ configStore.activeModelName }}</span>
                   <svg width="10" height="10" viewBox="0 0 10 10" fill="none" class="model-chevron">
                     <path d="M2.5 3.5L5 6L7.5 3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -827,7 +1055,7 @@ watch(
   min-height: 24px;
 }
 
-/* Ensure the dropdown menu is wide enough for long model names */
+/* ── 模型选择下拉菜单：视觉样式统一由 App.vue 全局样式控制（Naive UI Teleport 到 body，scoped 穿透无效）── */
 .footbar-model-select :deep(.n-base-select-menu) {
   min-width: 220px !important;
   animation: dropdownFadeIn 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);

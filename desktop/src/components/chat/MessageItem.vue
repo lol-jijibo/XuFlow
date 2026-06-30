@@ -9,6 +9,7 @@ import type { ChatMessage } from "../../stores/project";
 
 const props = defineProps<{
   message: ChatMessage;
+  activeStreaming?: boolean;
 }>();
 
 const themeStore = useThemeStore();
@@ -17,18 +18,10 @@ const isAssistant = computed(() => props.message.role === "assistant");
 const hasToolCalls = computed(() => (props.message.toolCalls?.length ?? 0) > 0);
 const hasReasoning = computed(() => !!props.message.reasoning && props.message.reasoning.length > 0);
 const reasoningPrompts = [
-  "Brewing a reply...",
-  "Drafting it...",
-  "Putting it together...",
-  "Polishing the words...",
-  "Cooking up an answer...",
-  "Wrapping it nicely...",
-  "Magic in progress...",
-  "Summoning a reply...",
-  "Stitching it up...",
-  "Sprinkling some polish...",
-  "Almost speaking...",
-  "Making it neat...",
+  "思考中...",
+  "整理回答中...",
+  "组织语言中...",
+  "生成回复中...",
 ] as const;
 const reasoningPromptIndex = ref(0);
 let reasoningPromptTimer: ReturnType<typeof setInterval> | null = null;
@@ -46,7 +39,7 @@ const allToolsDone = computed(() => {
  * 判断当前消息是否仍处于执行阶段。
  * 仅在最终回答尚未结束时维持统一的运行态提示。
  */
-const isRunning = computed(() => !props.message.done);
+const isRunning = computed(() => props.activeStreaming === true && !props.message.done);
 
 /**
  * 判断当前阶段是否正在调用工具。
@@ -236,7 +229,7 @@ onBeforeUnmount(() => {
             />
 
             <div
-              v-else-if="!message.done"
+              v-else-if="isRunning"
               class="typing-indicator"
             >
               <span class="dot"></span>

@@ -322,6 +322,7 @@ impl SessionStore {
         session_id: &str,
         role: &str,
         content: &str,
+        done: bool,
         reasoning: Option<&str>,
         tool_calls: Option<&str>,
     ) -> Result<MessageRow> {
@@ -329,8 +330,8 @@ impl SessionStore {
         let now = ts_now();
         conn.execute(
             "INSERT INTO messages (session_id, role, content, done, reasoning, reasoning_done, tool_calls, created_at) \
-             VALUES (?1, ?2, ?3, 0, ?4, 0, ?5, ?6)",
-            rusqlite::params![session_id, role, content, reasoning, tool_calls, now],
+             VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7)",
+            rusqlite::params![session_id, role, content, if done { 1 } else { 0 }, reasoning, tool_calls, now],
         )?;
         // 更新会话时间
         conn.execute(
@@ -343,7 +344,7 @@ impl SessionStore {
             session_id: session_id.to_string(),
             role: role.to_string(),
             content: content.to_string(),
-            done: false,
+            done,
             reasoning: reasoning.map(|s| s.to_string()),
             reasoning_done: false,
             tool_calls: tool_calls.map(|s| s.to_string()),

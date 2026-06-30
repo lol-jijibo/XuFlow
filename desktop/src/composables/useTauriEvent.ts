@@ -25,6 +25,7 @@ export function useTauriEvent() {
       projectStore.activeConversationId ?? "",
       msg.role,
       msg.content,
+      msg.done,
       msg.reasoning,
       tcJson,
     );
@@ -68,6 +69,9 @@ export function useTauriEvent() {
     }
   }
 
+  /** 立即刷新当前消息到持久层，确保最终状态不丢失。
+   *  流式结束后 lastStreamingMsg 因 done=true 返回 null，
+   *  但仍需将最终的 done/reasoningDone 等字段写入数据库。 */
   function flushPersist() {
     if (persistTimer) {
       clearTimeout(persistTimer);
@@ -76,6 +80,13 @@ export function useTauriEvent() {
     const msg = lastStreamingMsg();
     if (msg && projectStore.dbConnected) {
       dbSyncMessage(msg);
+    } else if (projectStore.dbConnected) {
+      // 消息已标记完成 → lastStreamingMsg 返回 null，但最终状态仍未持久化
+      const conv = projectStore.activeConversation;
+      const last = conv?.messages[conv.messages.length - 1];
+      if (last && last.role === "assistant" && last.done && last._dbId) {
+        dbSyncMessage(last);
+      }
     } else {
       projectStore.persistMessages();
     }
@@ -274,6 +285,11 @@ export function useTauriEvent() {
           const lastMsg = msgs[msgs.length - 1];
           if (lastMsg && lastMsg.role === "assistant") {
             lastMsg.done = true;
+            // 兜底：如果存在思考内容但 reasoningDone 未标记，确保完成标记被设置。
+            // 防止 reasoning-done 事件异常丢失导致重载后显示"思考中"。
+            if (lastMsg.reasoning && !lastMsg.reasoningDone) {
+              lastMsg.reasoningDone = true;
+            }
             // AI 彻底生成完毕后自动收起思考块，避免占据过多空间
             // 仅当用户未手动操作时自动收起（undefined = 未操作过）
             if (lastMsg.reasoningExpanded === undefined) {

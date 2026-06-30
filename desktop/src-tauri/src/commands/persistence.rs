@@ -222,13 +222,21 @@ pub async fn db_add_message(
     session_id: String,
     role: String,
     content: String,
+    done: Option<bool>,
     reasoning: Option<String>,
     tool_calls: Option<String>,
     state: State<'_, Arc<DbState>>,
 ) -> Result<MessageRow, String> {
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || {
-        store.add_message(&session_id, &role, &content, reasoning.as_deref(), tool_calls.as_deref())
+        store.add_message(
+            &session_id,
+            &role,
+            &content,
+            done.unwrap_or(false),
+            reasoning.as_deref(),
+            tool_calls.as_deref(),
+        )
     })
     .await
     .map_err(|e| format!("线程错误：{}", e))?

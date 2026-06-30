@@ -61,6 +61,19 @@ function uid(): string {
 const STORAGE_KEY = "xuflow-projects";
 const PINNED_KEY = "xuflow-pinned-projects";
 
+function finishStaleStreamingMessages(messages: ChatMessage[]) {
+  for (const msg of messages) {
+    if (msg.role !== "assistant" || msg.done) continue;
+    msg.done = true;
+    if (msg.reasoning && !msg.reasoningDone) {
+      msg.reasoningDone = true;
+    }
+    if (msg.reasoningExpanded === undefined) {
+      msg.reasoningExpanded = false;
+    }
+  }
+}
+
 // ── 置顶项目 ID 持久化（独立于主存储，SQLite 模式下也生效）──
 
 function loadPinnedIds(): Set<string> {
@@ -147,6 +160,7 @@ async function loadFromMySql(): Promise<{ projects: Project[]; activeProjectId: 
           reasoningDone: m.reasoning_done,
           toolCalls: m.tool_calls ? JSON.parse(m.tool_calls) : undefined,
         }));
+        finishStaleStreamingMessages(messages);
 
         conversations.push({
           id: s.id,
@@ -496,13 +510,14 @@ export const useProjectStore = defineStore("project", () => {
   // ── 消息持久化操作（流式持久化用）─────────────────────────
 
   /** 向 SQLite 插入新消息行，返回自增 id。 */
-  async function dbAddMessage(sessionId: string, role: string, content: string, reasoning?: string, toolCallsJson?: string): Promise<number> {
+  async function dbAddMessage(sessionId: string, role: string, content: string, done: boolean, reasoning?: string, toolCallsJson?: string): Promise<number> {
     if (!dbConnected.value) return 0;
     try {
       const row: any = await invoke("db_add_message", {
         sessionId,
         role,
         content,
+        done,
         reasoning: reasoning ?? null,
         toolCalls: toolCallsJson ?? null,
       });

@@ -76,7 +76,9 @@ pub async fn respond_approval(
 
 pub struct AgentSession {
     pub agent: Mutex<AgentLoop>,
-    pub cancelled: AtomicBool,
+    /// 取消标志：Arc 包装以在 AgentSession 与 AgentLoop 之间共享。
+    /// stop_generation 写入 → AgentLoop::run() 轮询读取，实现即时中止。
+    pub cancelled: Arc<AtomicBool>,
     /// Shared approval channel — also held by TauriApprovalHandler.
     pub approval_tx: ApprovalChannel,
     /// MCP 连接管理器，应用关闭时需调用 shutdown
@@ -97,17 +99,19 @@ impl AgentSession {
             .unwrap_or_else(|_| ".".to_string());
 
         let backend = Self::build_backend(&provider, &model, &api_key);
+        let cancelled = Arc::new(AtomicBool::new(false));
         let agent = Self::build_agent(
             backend,
             app_handle.clone(),
             approval_tx.clone(),
             &working_dir,
             None, // MCP 将在 configure_agent 中延迟加载
+            cancelled.clone(),
         );
 
         Self {
             agent: Mutex::new(agent),
-            cancelled: AtomicBool::new(false),
+            cancelled,
             approval_tx,
             mcp_manager: Arc::new(Mutex::new(None)),
             mcp_init_errors: Arc::new(Mutex::new(Vec::new())),
@@ -167,6 +171,7 @@ impl AgentSession {
             self.approval_tx.clone(),
             &working_dir,
             mcp_opt,
+            self.cancelled.clone(),
         );
         *self.agent.lock().await = agent;
     }
@@ -185,6 +190,7 @@ impl AgentSession {
         approval_tx: ApprovalChannel,
         working_dir: &str,
         mcp_manager: Option<Arc<McpManager>>,
+        cancelled: Arc<AtomicBool>,
     ) -> AgentLoop {
         let mut registry = ToolRegistry::new();
         registry.register(Box::new(ReadFileTool));
@@ -217,6 +223,7 @@ impl AgentSession {
         let system_prompt = build_system_prompt(working_dir);
         AgentLoop::new(backend, tools, approval)
             .with_system_prompt(&system_prompt)
+            .with_cancellation(cancelled)
     }
 }
 

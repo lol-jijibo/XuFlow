@@ -17,7 +17,9 @@ use crate::backends::token_counter::{self, TokenEstimateConfig};
 use crate::backends::{ChatMessage, ChatParams, FunctionDef, LlmBackend, StreamEvent, ToolDef, Usage};
 use crate::tools::ToolRegistry;
 use serde_json::Value;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 const MAX_TOOL_ROUNDS: usize = 30;
@@ -34,6 +36,9 @@ pub struct AgentLoop {
     min_user_turns: u32,
     /// Token estimation coefficients (model-configurable).
     token_config: TokenEstimateConfig,
+    /// 取消标志：由 Tauri stop_generation 命令写入，Agent 循环每轮检查。
+    /// 为 None 时忽略取消逻辑（非 Tauri 场景兼容）。
+    cancelled: Option<Arc<AtomicBool>>,
 }
 
 impl AgentLoop {
@@ -52,7 +57,15 @@ impl AgentLoop {
             context_window: default_ctx,
             min_user_turns: DEFAULT_MIN_USER_TURNS,
             token_config: TokenEstimateConfig::default(),
+            cancelled: None,
         }
+    }
+
+    /// 注入取消令牌：Agent 循环在每轮 API 调用前后检查此标志，
+    /// 一旦被外部设为 true 即立即中止执行并返回。
+    pub fn with_cancellation(mut self, cancelled: Arc<AtomicBool>) -> Self {
+        self.cancelled = Some(cancelled);
+        self
     }
 
     /// Expose the backend for standalone operations (e.g. title summarization).
@@ -243,6 +256,13 @@ impl AgentLoop {
         };
 
         for _round in 0..MAX_TOOL_ROUNDS {
+            // ── 检查取消标志：用户点击停止后立即中止本轮 ──
+            if let Some(ref cancelled) = self.cancelled {
+                if cancelled.load(Ordering::SeqCst) {
+                    let _ = tx.send(StreamEvent::Done { usage: total_usage.clone() }).await;
+                    return Ok(total_usage);
+                }
+            }
             // Build tool definitions from registry
             // 针对 MCP 工具数量过多导致 prompt 膨胀的问题，采用多级截断：
             //   ≤ 20 个 MCP 工具：全量发送完整定义
@@ -273,34 +293,56 @@ impl AgentLoop {
             };
             let mut had_error = false;
 
-            while let Some(event) = backend_rx.recv().await {
-                match &event {
-                    StreamEvent::TextDelta { .. } | StreamEvent::ReasoningDelta { .. } | StreamEvent::ReasoningDone => {
-                        tx.send(event).await.ok();
+            // 在接收后端事件的同时轮询取消标志（每 200ms 检查一次），
+            // 确保用户点击停止后流式输出能在 200ms 内中止，不再等待 LLM 响应完成。
+            let mut chat_done = false;
+            while !chat_done {
+                // 先检查取消标志，避免在已取消状态下继续轮询
+                if let Some(ref cancelled) = self.cancelled {
+                    if cancelled.load(Ordering::SeqCst) {
+                        chat_handle.abort();
+                        let _ = tx.send(StreamEvent::Done { usage: total_usage.clone() }).await;
+                        return Ok(total_usage);
                     }
-                    StreamEvent::ToolCall {
-                        id,
-                        name,
-                        arguments,
-                    } => {
-                        tool_calls.push((id.clone(), name.clone(), arguments.clone()));
-                        tx.send(event).await.ok();
+                }
+
+                match tokio::time::timeout(Duration::from_millis(200), backend_rx.recv()).await {
+                    Ok(Some(event)) => {
+                        match &event {
+                            StreamEvent::TextDelta { .. } | StreamEvent::ReasoningDelta { .. } | StreamEvent::ReasoningDone => {
+                                tx.send(event).await.ok();
+                            }
+                            StreamEvent::ToolCall {
+                                id,
+                                name,
+                                arguments,
+                            } => {
+                                tool_calls.push((id.clone(), name.clone(), arguments.clone()));
+                                tx.send(event).await.ok();
+                            }
+                            StreamEvent::Done { usage } => {
+                                round_usage = usage.clone();
+                                // Don't forward intermediate Done — only final Done after all rounds
+                            }
+                            StreamEvent::Error { .. } => {
+                                had_error = true;
+                                tx.send(event).await.ok();
+                            }
+                            // Pass through new events (TokenUsage, ContextTrimmed — though ContextTrimmed
+                            // is emitted by us, not the backend)
+                            StreamEvent::TokenUsage { .. } | StreamEvent::ContextTrimmed { .. } => {
+                                tx.send(event).await.ok();
+                            }
+                            _ => {
+                                tx.send(event).await.ok();
+                            }
+                        }
                     }
-                    StreamEvent::Done { usage } => {
-                        round_usage = usage.clone();
-                        // Don't forward intermediate Done — only final Done after all rounds
+                    Ok(None) => {
+                        chat_done = true;
                     }
-                    StreamEvent::Error { .. } => {
-                        had_error = true;
-                        tx.send(event).await.ok();
-                    }
-                    // Pass through new events (TokenUsage, ContextTrimmed — though ContextTrimmed
-                    // is emitted by us, not the backend)
-                    StreamEvent::TokenUsage { .. } | StreamEvent::ContextTrimmed { .. } => {
-                        tx.send(event).await.ok();
-                    }
-                    _ => {
-                        tx.send(event).await.ok();
+                    Err(_) => {
+                        // 超时 —— 回到循环顶部再次检查取消标志
                     }
                 }
             }
@@ -534,6 +576,14 @@ impl AgentLoop {
                 })
                 .await
                 .ok();
+            }
+
+            // ── 工具执行后再次检查取消标志，避免进入下一轮 API 调用 ──
+            if let Some(ref cancelled) = self.cancelled {
+                if cancelled.load(Ordering::SeqCst) {
+                    let _ = tx.send(StreamEvent::Done { usage: total_usage.clone() }).await;
+                    return Ok(total_usage);
+                }
             }
 
             // ── Pre-next-round: re-estimate token usage ──
