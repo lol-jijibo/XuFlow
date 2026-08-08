@@ -130,8 +130,10 @@ export const useAgentStore = defineStore("agent", () => {
     projectStore.persistMessages();
     isRunning.value = true;
 
+    const sessionId = conv.id;
+
     try {
-      const result = await invoke<string>("send_message", { content });
+      const result = await invoke<string>("send_message", { sessionId, content });
       console.log("[agent] send_message done:", result);
     } catch (e) {
       console.error("[agent] send_message error:", e);
@@ -150,8 +152,9 @@ export const useAgentStore = defineStore("agent", () => {
   // 停止生成：通知 Rust 后端取消后，立即更新前端 UI 状态，
   // 避免等待后端完全结束才切换按钮（造成"点了没反应"的体验）。
   async function stopGeneration() {
+    const sessionId = useProjectStore().activeConversationId;
     try {
-      await invoke("stop_generation");
+      await invoke("stop_generation", { sessionId });
     } catch (e) {
       console.error("[agent] stop_generation error:", e);
     }
@@ -168,12 +171,37 @@ export const useAgentStore = defineStore("agent", () => {
   }
 
   async function respondApproval(approved: boolean) {
+    const sessionId = useProjectStore().activeConversationId;
+    if (!sessionId) return;
     try {
-      await invoke("respond_approval", { approved });
+      await invoke("respond_approval", { sessionId, approved });
     } catch (e) {
       console.error("[agent] respond_approval error:", e);
     } finally {
       pendingApproval.value = null;
+    }
+  }
+
+  /** 恢复会话上下文到后端：切换会话时调用，传递消息历史重建 AgentLoop。 */
+  async function restoreSession(sessionId: string) {
+    const projectStore = useProjectStore();
+    const project = projectStore.activeProject;
+    if (!project) return;
+    const conv = project.conversations.find((c: { id: string }) => c.id === sessionId);
+    if (!conv || conv.messages.length === 0) return;
+
+    // 只传 role + content，不传 tool_calls（恢复时简化处理）
+    const historyMsgs = conv.messages
+      .filter((m: { role: string }) => m.role !== "system")
+      .map((m: { role: string; content: string }) => ({ role: m.role, content: m.content }));
+
+    try {
+      await invoke("restore_session", {
+        sessionId,
+        messagesJson: JSON.stringify(historyMsgs),
+      });
+    } catch (e) {
+      console.error("[agent] restore_session error:", e);
     }
   }
 
@@ -195,6 +223,7 @@ export const useAgentStore = defineStore("agent", () => {
     sendMessage,
     stopGeneration,
     respondApproval,
+    restoreSession,
     // Token / context tracking
     tokenUsage,
     tokenActual,

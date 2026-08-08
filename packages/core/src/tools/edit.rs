@@ -172,3 +172,92 @@ impl Tool for EditFileTool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::fs;
+
+    async fn create_temp_file(content: &str) -> (String, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        fs::write(&file_path, content).await.unwrap();
+        (file_path.to_string_lossy().to_string(), dir)
+    }
+
+    #[tokio::test]
+    async fn test_edit_single_replacement() {
+        let (path, _dir) = create_temp_file("hello world\nfoo bar\n").await;
+        let tool = EditFileTool;
+        let result = tool.execute(serde_json::json!({
+            "path": path,
+            "old_string": "hello world",
+            "new_string": "hi there"
+        })).await;
+        assert!(result.success, "edit failed: {:?}", result.error);
+        let content = fs::read_to_string(&path).await.unwrap();
+        assert_eq!(content, "hi there\nfoo bar\n");
+    }
+
+    #[tokio::test]
+    async fn test_edit_not_found() {
+        let (path, _dir) = create_temp_file("hello world\n").await;
+        let tool = EditFileTool;
+        let result = tool.execute(serde_json::json!({
+            "path": path,
+            "old_string": "nonexistent",
+            "new_string": "xxx"
+        })).await;
+        assert!(!result.success);
+        assert!(result.error.unwrap().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_edit_multiple_matches_no_replace_all() {
+        let (path, _dir) = create_temp_file("dup\ncontent\ndup\n").await;
+        let tool = EditFileTool;
+        let result = tool.execute(serde_json::json!({
+            "path": path,
+            "old_string": "dup",
+            "new_string": "xxx",
+            "replace_all": false
+        })).await;
+        assert!(!result.success);
+        let err = result.error.unwrap();
+        assert!(err.contains("matches 2 locations"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_edit_replace_all() {
+        let (path, _dir) = create_temp_file("dup\ncontent\ndup\n").await;
+        let tool = EditFileTool;
+        let result = tool.execute(serde_json::json!({
+            "path": path,
+            "old_string": "dup",
+            "new_string": "xxx",
+            "replace_all": true
+        })).await;
+        assert!(result.success, "edit failed: {:?}", result.error);
+        let content = fs::read_to_string(&path).await.unwrap();
+        assert_eq!(content, "xxx\ncontent\nxxx\n");
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_missing() {
+        let tool = EditFileTool;
+        let result = tool.execute(serde_json::json!({
+            "path": "/nonexistent/path/file.txt",
+            "old_string": "x",
+            "new_string": "y"
+        })).await;
+        assert!(!result.success);
+    }
+
+    #[tokio::test]
+    async fn test_edit_missing_parameters() {
+        let tool = EditFileTool;
+        let result = tool.execute(serde_json::json!({})).await;
+        assert!(!result.success);
+        assert!(result.error.unwrap().contains("Missing"));
+    }
+}

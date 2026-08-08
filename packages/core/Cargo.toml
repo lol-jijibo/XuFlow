@@ -25,3 +25,6 @@ scraper = "0.20"       # HTML DOM 解析（基于 Servo html5ever），用 CSS �
 encoding_rs = "0.8"    # 字符编码自动检测（Firefox 同款引擎），解决乱码问题
 url = "2"              # URL 解析与规范化，处理相对路径、查询参数等
 robotstxt = "0.3"      # robots.txt 解析器，按网站爬取协议验证路径是否允许抓取
+
+[dev-dependencies]
+tempfile = "3"

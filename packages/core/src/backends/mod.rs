@@ -85,6 +85,11 @@ pub enum StreamEvent {
         current_usage_percent: u32, // post-trim usage percentage (0–100)
         context_window: u32,
     },
+    /// Emitted when the agent summarizes older conversation turns before dropping them.
+    ContextSummarized {
+        turns_summarized: u32,     // how many turns were compressed
+        summary_length: u32,       // length of the generated summary in chars
+    },
     Done { usage: Usage },
     Error { message: String },
 }
@@ -232,9 +237,18 @@ pub(crate) async fn openai_compat_chat(
                 }
                 tx.send(StreamEvent::ReasoningDelta { delta: rc.to_string() }).await.ok();
             } else if in_reasoning {
-                // reasoning_content disappeared → reasoning phase ended
-                in_reasoning = false;
-                tx.send(StreamEvent::ReasoningDone).await.ok();
+                // 仅当正文内容真正开始输出时才判定推理阶段结束。
+                // DeepSeek-R1 等模型在推理期间可能发送不携带 reasoning_content
+                // 字段的中间 chunk，若仅凭字段缺失来判定结束会导致 ReasoningDone
+                // 与 ReasoningDelta 交替触发，前端思考块反复展开/收起闪烁。
+                let has_content = delta
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .map_or(false, |c| !c.is_empty());
+                if has_content {
+                    in_reasoning = false;
+                    tx.send(StreamEvent::ReasoningDone).await.ok();
+                }
             }
 
             // Text content delta (only emit when not in reasoning phase)

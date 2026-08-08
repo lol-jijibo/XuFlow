@@ -39,6 +39,10 @@ pub struct AgentLoop {
     /// 取消标志：由 Tauri stop_generation 命令写入，Agent 循环每轮检查。
     /// 为 None 时忽略取消逻辑（非 Tauri 场景兼容）。
     cancelled: Option<Arc<AtomicBool>>,
+    /// 累积的早期对话摘要（LLM 生成，替代丢弃的旧 turn）。
+    summary: String,
+    /// 是否启用摘要压缩。默认 true；可通过 set_summarization_enabled 关闭。
+    enable_summarization: bool,
 }
 
 impl AgentLoop {
@@ -58,6 +62,8 @@ impl AgentLoop {
             min_user_turns: DEFAULT_MIN_USER_TURNS,
             token_config: TokenEstimateConfig::default(),
             cancelled: None,
+            summary: String::new(),
+            enable_summarization: true,
         }
     }
 
@@ -83,6 +89,13 @@ impl AgentLoop {
         self
     }
 
+    /// 批量注入已有消息历史（从 SQLite 恢复会话上下文时使用）。
+    /// 直接替换当前 messages，后续 run() 在此基础上追加新消息。
+    pub fn with_messages(mut self, messages: Vec<ChatMessage>) -> Self {
+        self.messages = messages;
+        self
+    }
+
     // ── Context window configuration ──────────────────────────────────
 
     /// Set a custom context window size (overrides the model default).
@@ -105,6 +118,17 @@ impl AgentLoop {
         self.min_user_turns
     }
 
+    /// Enable or disable LLM summarization of old conversation turns.
+    /// When disabled, old turns are simply dropped (legacy behavior).
+    pub fn set_summarization_enabled(&mut self, enabled: bool) {
+        self.enable_summarization = enabled;
+    }
+
+    /// Whether summarization is currently enabled.
+    pub fn summarization_enabled(&self) -> bool {
+        self.enable_summarization
+    }
+
     // ── Token estimation ──────────────────────────────────────────────
 
     /// Estimate total tokens for all messages currently in context.
@@ -112,7 +136,122 @@ impl AgentLoop {
         token_counter::estimate_total_tokens(&self.messages, &self.token_config)
     }
 
-    // ── Dynamic context trimming ──────────────────────────────────────
+    // ── Dynamic context trimming (with optional LLM summarization) ────
+
+    /// 对即将被丢弃的对话轮次生成 LLM 摘要，保留关键决策、代码变更和用户意图。
+    /// 失败时返回 None，调用方降级为直接丢弃。
+    async fn summarize_turns(&self, turns: &[Vec<ChatMessage>]) -> Option<String> {
+        if turns.is_empty() {
+            return None;
+        }
+
+        // 构建待摘要的对话文本
+        let mut transcript = String::new();
+        for turn in turns {
+            for msg in turn {
+                let role_label = match msg.role.as_str() {
+                    "user" => "用户",
+                    "assistant" => "助手",
+                    "tool" => continue, // 工具结果通常很长且没有摘要价值
+                    _ => continue,
+                };
+                if let Some(content) = &msg.content {
+                    let text = match content {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    // 截断过长的单条消息
+                    let excerpt: String = if text.len() > 500 {
+                        format!("{}...", &text[..500])
+                    } else {
+                        text
+                    };
+                    transcript.push_str(&format!("{role_label}: {excerpt}\n"));
+                }
+            }
+        }
+
+        if transcript.trim().is_empty() {
+            return None;
+        }
+
+        // 构建摘要 prompt
+        let summary_prompt = format!(
+            "请用中文将以下对话片段压缩为一段简洁的摘要（最多 200 字），\
+             保留关键决策、代码变更内容和用户的核心意图：\n\n{transcript}\n\n摘要："
+        );
+
+        // 如果有旧摘要，要求模型合并
+        let user_content = if self.summary.is_empty() {
+            summary_prompt
+        } else {
+            format!(
+                "已有的历史摘要：\n{}\n\n请将以下新对话与已有摘要合并为一段摘要（最多 300 字）：\n\n{transcript}\n\n合并后的摘要：",
+                self.summary
+            )
+        };
+
+        let messages = vec![
+            ChatMessage {
+                role: "system".into(),
+                content: Some(Value::String(
+                    "你是一个对话摘要助手。输出纯文本摘要，不含前缀、标签或格式标记。".into(),
+                )),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: Some(Value::String(user_content)),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+        ];
+
+        let params = ChatParams {
+            messages,
+            tools: vec![],
+            temperature: Some(0.3),
+            max_tokens: Some(300),
+        };
+
+        // 通过临时通道获取摘要结果（与 simple_completion 模式一致）
+        let (sum_tx, mut sum_rx) = mpsc::channel::<StreamEvent>(32);
+        let backend = self.backend.clone();
+
+        let chat_task = tokio::spawn(async move { backend.chat(params, sum_tx).await });
+
+        let mut summary_text = String::new();
+        // 10 秒超时，防止摘要调用阻塞主流程
+        let timeout = tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(event) = sum_rx.recv().await {
+                match event {
+                    StreamEvent::TextDelta { delta } => summary_text.push_str(&delta),
+                    StreamEvent::Done { .. } => break,
+                    StreamEvent::Error { .. } => return Err(()),
+                    _ => {}
+                }
+            }
+            Ok(())
+        })
+        .await;
+
+        match timeout {
+            Ok(Ok(_)) => {
+                let text = summary_text.trim().to_string();
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
+            }
+            _ => {
+                // 超时或后端错误 → 降级，返回 None 让调用方直接丢弃
+                let _ = chat_task.abort();
+                None
+            }
+        }
+    }
 
     /// Trim older conversation turns to stay within the context window.
     ///
@@ -121,10 +260,12 @@ impl AgentLoop {
     ///   2. Group messages into atomic "turns" (user msg + all following
     ///      assistant/tool msgs until the next user msg).
     ///   3. From the end, mark the last `min_user_turns` turns as protected.
-    ///   4. Drop oldest unprotected turns one by one, re-estimating after
+    ///   4. If summarization is enabled, generate an LLM summary of the turns
+    ///      about to be dropped and inject it as context before discarding.
+    ///   5. Drop oldest unprotected turns one by one, re-estimating after
     ///      each drop, until usage < 60% or only protected turns remain.
-    ///   5. Emit a ContextTrimmed event; do NOT insert a visible system msg.
-    fn trim_context(&mut self, tx: &mpsc::Sender<StreamEvent>) {
+    ///   6. Emit ContextTrimmed and ContextSummarized events.
+    async fn trim_context(&mut self, tx: &mpsc::Sender<StreamEvent>) {
         let estimated = self.estimate_total_tokens();
         let threshold = self.context_window.saturating_mul(80) / 100;
 
@@ -164,26 +305,79 @@ impl AgentLoop {
         }
 
         let protected_start = turns.len().saturating_sub(self.min_user_turns as usize);
-        let mut removed_count: u32 = 0;
+
+        // ── 摘要压缩：先对即将被丢弃的 turn 做 LLM 摘要 ──
+        if self.enable_summarization && protected_start > 0 {
+            let to_summarize: Vec<Vec<ChatMessage>> =
+                turns[..protected_start].to_vec();
+
+            if let Some(new_summary) = self.summarize_turns(&to_summarize).await {
+                // 更新累积摘要
+                self.summary = new_summary;
+
+                let _ = tx.try_send(StreamEvent::ContextSummarized {
+                    turns_summarized: protected_start as u32,
+                    summary_length: self.summary.len() as u32,
+                });
+
+                // 将摘要注入为一条特殊的 user 消息，放在受保护的 turn 之前。
+                // 使用 user 角色而非 system，确保不同 API 都能正确传递。
+                let summary_msg = ChatMessage {
+                    role: "user".into(),
+                    content: Some(Value::String(format!(
+                        "[历史对话摘要]\n{}",
+                        self.summary
+                    ))),
+                    tool_calls: None,
+                    tool_call_id: None,
+                };
+
+                // 重建 messages：system + summary + 受保护的 turn
+                let mut new_msgs = system_msgs.clone();
+                new_msgs.push(summary_msg);
+                for turn in &turns[protected_start..] {
+                    new_msgs.extend(turn.iter().cloned());
+                }
+
+                // 检查是否仍需进一步裁剪
+                let current_tokens = token_counter::estimate_total_tokens(&new_msgs, &self.token_config);
+                let target = self.context_window.saturating_mul(60) / 100;
+                if current_tokens < target {
+                    self.messages = new_msgs;
+                    let current_usage_percent = if self.context_window > 0 {
+                        ((current_tokens as u64 * 100) / self.context_window as u64).min(100) as u32
+                    } else {
+                        0
+                    };
+                    let _ = tx.try_send(StreamEvent::ContextTrimmed {
+                        rounds_removed: protected_start as u32,
+                        tokens_freed: estimated.saturating_sub(current_tokens),
+                        current_usage_percent,
+                        context_window: self.context_window,
+                    });
+                    return;
+                }
+
+                // 摘要后仍超阈值 → 使用新 message 状态继续裁剪
+                self.messages = new_msgs;
+                return; // 一次摘要足以释放空间；如果仍不够，下次循环再裁剪
+            }
+            // 摘要失败 → 降级为原始丢弃逻辑（继续执行下方代码）
+        }
+
+        // ── 丢弃式裁剪（无摘要或摘要失败时的降级路径）──
         let tokens_before = token_counter::estimate_total_tokens(
             &turns.iter().flatten().cloned().collect::<Vec<_>>(),
             &self.token_config,
         );
 
-        // Drop oldest unprotected turns until we're below 60% or out of candidates
-        let target = self.context_window.saturating_mul(60) / 100;
-        let mut drop_idx = 0;
+        let mut removed_count: u32 = 0;
 
-        while drop_idx < protected_start {
+        let target = self.context_window.saturating_mul(60) / 100;
+
+        while turns.len() > self.min_user_turns as usize {
             turns.remove(0);
             removed_count += 1;
-            drop_idx = drop_idx.saturating_sub(1); // adjust since we removed from front
-            // Actually, since we're always removing index 0, the protected_start shifts
-            // But we need to recalculate what's protected
-            let new_protected_start = turns.len().saturating_sub(self.min_user_turns as usize);
-            if new_protected_start == 0 {
-                break; // only protected turns remain
-            }
 
             let current_tokens = token_counter::estimate_total_tokens(
                 &turns.iter().flatten().cloned().collect::<Vec<_>>(),
@@ -192,7 +386,6 @@ impl AgentLoop {
             if current_tokens < target {
                 break;
             }
-            // Keep drop_idx at 0 since we're always removing from front
         }
 
         // Rebuild messages: system msgs + remaining turns
@@ -211,7 +404,6 @@ impl AgentLoop {
 
         self.messages = new_messages;
 
-        // Notify frontend — silent, non-intrusive
         let _ = tx.try_send(StreamEvent::ContextTrimmed {
             rounds_removed: removed_count,
             tokens_freed,
@@ -247,7 +439,7 @@ impl AgentLoop {
         .await
         .ok();
 
-        self.trim_context(&tx);
+        self.trim_context(&tx).await;
 
         let mut total_usage = Usage {
             prompt_tokens: 0,
@@ -603,7 +795,7 @@ impl AgentLoop {
             }
 
             // Trim before next API call if messages grew significantly
-            self.trim_context(&tx);
+            self.trim_context(&tx).await;
         }
 
         // Hit max rounds — emit a clear, user-friendly message
@@ -719,4 +911,114 @@ fn build_tool_defs_with_truncation(tools: &[Box<dyn crate::tools::Tool>]) -> Vec
     }
 
     defs
+}
+
+// ── 测试 ─────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::{Tool, ToolRegistry, ToolResult};
+
+    /// 纯文本工具供测试使用
+    struct DummyTool {
+        name: String,
+    }
+
+    #[async_trait::async_trait]
+    impl Tool for DummyTool {
+        fn name(&self) -> &str { &self.name }
+        fn description(&self) -> &str { "A dummy tool" }
+        fn parameters(&self) -> Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "arg": { "type": "string" }
+                }
+            })
+        }
+        fn is_dangerous(&self) -> bool { false }
+        async fn execute(&self, _args: Value) -> ToolResult {
+            ToolResult { success: true, content: "ok".into(), error: None }
+        }
+    }
+
+    fn make_mcp_tools(count: usize, server: &str) -> Vec<Box<dyn Tool>> {
+        (0..count)
+            .map(|i| {
+                Box::new(DummyTool {
+                    name: format!("mcp__{}__tool_{}", server, i),
+                }) as Box<dyn Tool>
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_tool_truncation_below_20_mcps_full_definition() {
+        let builtins: Vec<Box<dyn Tool>> = vec![Box::new(DummyTool { name: "read_file".into() })];
+        let mcps = make_mcp_tools(5, "filesystem");
+        let all: Vec<Box<dyn Tool>> = builtins.into_iter().chain(mcps).collect();
+        let defs = build_tool_defs_with_truncation(&all);
+        // 1 builtin + 5 MCP = 6 full definitions
+        assert_eq!(defs.len(), 6);
+        for d in &defs {
+            assert!(
+                d.function.parameters != serde_json::json!({}),
+                "工具 {} 的 parameters 不应为空", d.function.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_tool_truncation_21_to_40_mcps_parameters_empty() {
+        let builtins: Vec<Box<dyn Tool>> = vec![Box::new(DummyTool { name: "read_file".into() })];
+        let mcps = make_mcp_tools(25, "filesystem");
+        let all: Vec<Box<dyn Tool>> = builtins.into_iter().chain(mcps).collect();
+        let defs = build_tool_defs_with_truncation(&all);
+        // 1 builtin (full) + 25 MCP (empty params)
+        assert_eq!(defs.len(), 26);
+        // 内置工具仍应有完整参数
+        assert_ne!(defs[0].function.parameters, serde_json::json!({}));
+        // MCP 工具的参数应为空
+        assert_eq!(defs[1].function.parameters, serde_json::json!({}));
+    }
+
+    #[test]
+    fn test_tool_truncation_over_40_mcps_aggregated() {
+        let builtins: Vec<Box<dyn Tool>> = vec![Box::new(DummyTool { name: "read_file".into() })];
+        let mcps_a = make_mcp_tools(25, "server_a");
+        let mcps_b = make_mcp_tools(20, "server_b");
+        let all: Vec<Box<dyn Tool>> = builtins
+            .into_iter()
+            .chain(mcps_a)
+            .chain(mcps_b)
+            .collect();
+        let defs = build_tool_defs_with_truncation(&all);
+        // 1 builtin + 2 aggregated server entries
+        assert_eq!(defs.len(), 3);
+        assert!(defs[1].function.name.contains("list_tools"));
+        assert!(defs[2].function.name.contains("list_tools"));
+    }
+
+    #[test]
+    fn test_agent_context_window_defaults() {
+        // 纯单元测试：验证默认值初始化
+        let tools = Arc::new(ToolRegistry::new());
+        struct NoopApproval;
+        #[async_trait::async_trait]
+        impl crate::agent::types::ApprovalHandler for NoopApproval {
+            async fn approve(&self, _tool: &str, _params: &str) -> bool { true }
+        }
+
+        let backend = Arc::new(crate::backends::openai_compat::OpenAICompatBackend::new(
+            "test-model".into(),
+            "https://example.com".into(),
+            "sk-test".into(),
+        ));
+
+        let agent = AgentLoop::new(backend, tools, Arc::new(NoopApproval));
+        assert_eq!(agent.context_window(), 128_000);
+        assert_eq!(agent.min_user_turns(), 3);
+        assert!(agent.summarization_enabled());
+    }
 }

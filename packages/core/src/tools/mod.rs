@@ -4,6 +4,7 @@ pub mod file;
 pub mod git;
 pub mod glob;
 pub mod grep;
+pub mod patch;
 pub mod todo;
 pub mod web;
 pub mod web_crawl;

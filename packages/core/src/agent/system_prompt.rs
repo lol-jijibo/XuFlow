@@ -10,7 +10,10 @@ or relative paths resolved from this directory.\n\n\
 - read_file: Read a file with line numbers.\n\
 - write_file: Write or overwrite a file (requires user approval).\n\
 - edit: Make precise string replacements in files (requires user approval). \
-Prefer edit over write_file for small changes in existing files.\n\
+Prefer edit over write_file for small changes in existing files.
+- apply_patch: Apply a unified diff patch to files (requires user approval). \
+Use this for multi-block changes or when exact string matching fails — \
+it tolerates minor whitespace / line-number drift via context-line fuzzy matching.\n\
 - list_dir: List directory contents.\n\
 - glob: Find files by pattern (e.g. '**/*.rs').\n\
 - grep: Search file contents with regex.\n\

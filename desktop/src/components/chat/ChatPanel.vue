@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, onMounted, onUnmounted, onBeforeUpdate, computed } from "vue";
 import { NInput, NScrollbar, NSelect, useMessage } from "naive-ui";
+import { invoke } from "@tauri-apps/api/core";
 import MessageItem from "./MessageItem.vue";
 import TodoPanel from "./TodoPanel.vue";
 import PlanApprovalCard from "../approval/PlanApprovalCard.vue";
@@ -373,8 +374,11 @@ function handleStop() {
   store.stopGeneration();
 }
 
-// ── 会话切换时保存/恢复滚动位置 ──
+// ── 会话切换时保存/恢复滚动位置、恢复后端上下文 ──
 // 切走时记住当前位置，切回时恢复；没有历史位置则默认滚到底部。
+// 同时通知后端恢复该会话的消息历史（重建 AgentLoop 上下文），
+// 并延迟关闭旧会话释放资源（5s 防抖，避免频繁切换时反复重建）。
+let closeTimer: ReturnType<typeof setTimeout> | null = null;
 watch(
   () => projectStore.activeConversationId,
   (newId, oldId) => {
@@ -382,9 +386,21 @@ watch(
       const oldScrollEl = getScrollElement();
       clearPendingScrollSave();
       saveCurrentScrollPosition(oldId, oldScrollEl);
+      // 延迟关闭旧会话（5s 后如果用户没切回去才真正关闭）
+      if (closeTimer) clearTimeout(closeTimer);
+      const toClose = oldId;
+      closeTimer = setTimeout(() => {
+        if (projectStore.activeConversationId !== toClose) {
+          invoke("close_session", { sessionId: toClose })
+            .catch(() => {}); // 静默失败
+        }
+        closeTimer = null;
+      }, 5000);
     }
     if (newId) {
       restoreConversationScroll(newId);
+      // 恢复后端会话上下文（消息历史）
+      store.restoreSession(newId);
     } else {
       renderedConversationId = null;
     }

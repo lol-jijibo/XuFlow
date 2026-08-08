@@ -80,13 +80,15 @@ pub async fn db_is_connected() -> Result<bool, String> {
 
 #[tauri::command]
 pub async fn db_create_project(
+    id: Option<String>,
     name: String,
     source: Option<String>,
     state: State<'_, Arc<DbState>>,
 ) -> Result<ProjectRow, String> {
     let store = state.store.clone();
     let source = source.unwrap_or_else(|| "local".to_string());
-    let id = uid();
+    // 优先使用前端传入的 ID，确保前后端 ID 一致
+    let id = id.unwrap_or_else(uid);
 
     tokio::task::spawn_blocking(move || {
         store.create_project(&id, &name, &source)
@@ -136,6 +138,7 @@ pub async fn db_delete_project(
 
 #[tauri::command]
 pub async fn db_create_session(
+    id: Option<String>,
     project_id: String,
     title: String,
     title_source: Option<String>,
@@ -143,7 +146,8 @@ pub async fn db_create_session(
     state: State<'_, Arc<DbState>>,
 ) -> Result<SessionRow, String> {
     let store = state.store.clone();
-    let id = uid();
+    // 优先使用前端传入的 ID，确保前后端 ID 一致，避免后续删除/更新操作因 ID 不匹配而静默失败
+    let id = id.unwrap_or_else(uid);
     let ts = title_source.unwrap_or_else(|| "default".to_string());
     let vis = visible.unwrap_or(true);
 
@@ -197,7 +201,8 @@ pub async fn db_delete_session(
     state: State<'_, Arc<DbState>>,
 ) -> Result<bool, String> {
     let store = state.store.clone();
-    tokio::task::spawn_blocking(move || store.delete_session(&id))
+    // 软删除：将会话移入回收站，保留消息数据以备恢复
+    tokio::task::spawn_blocking(move || store.soft_delete_session(&id))
         .await
         .map_err(|e| format!("线程错误：{}", e))?
         .map_err(|e| format!("删除会话失败：{}", e))
@@ -213,6 +218,59 @@ pub async fn db_reveal_session(
         .await
         .map_err(|e| format!("线程错误：{}", e))?
         .map_err(|e| format!("更新会话可见性失败：{}", e))
+}
+
+// ── 回收站操作 ────────────────────────────────────────────
+
+/// 从回收站恢复会话：清除 deleted_at，重新出现在侧边栏。
+#[tauri::command]
+pub async fn db_restore_session(
+    id: String,
+    state: State<'_, Arc<DbState>>,
+) -> Result<bool, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || store.restore_session(&id))
+        .await
+        .map_err(|e| format!("线程错误：{}", e))?
+        .map_err(|e| format!("恢复会话失败：{}", e))
+}
+
+/// 彻底删除会话：物理删除行及关联消息，不可恢复。
+#[tauri::command]
+pub async fn db_permanent_delete_session(
+    id: String,
+    state: State<'_, Arc<DbState>>,
+) -> Result<bool, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || store.permanent_delete_session(&id))
+        .await
+        .map_err(|e| format!("线程错误：{}", e))?
+        .map_err(|e| format!("彻底删除会话失败：{}", e))
+}
+
+/// 列出回收站中所有已删除的会话。
+#[tauri::command]
+pub async fn db_list_trash_sessions(
+    state: State<'_, Arc<DbState>>,
+) -> Result<Vec<SessionRow>, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || store.list_trash_sessions())
+        .await
+        .map_err(|e| format!("线程错误：{}", e))?
+        .map_err(|e| format!("查询回收站失败：{}", e))
+}
+
+/// 清理超过指定天数的回收站记录，返回清理数量。
+#[tauri::command]
+pub async fn db_purge_expired_trash(
+    retention_days: i64,
+    state: State<'_, Arc<DbState>>,
+) -> Result<u64, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || store.purge_expired_trash(retention_days))
+        .await
+        .map_err(|e| format!("线程错误：{}", e))?
+        .map_err(|e| format!("清理过期回收站失败：{}", e))
 }
 
 // ── 消息 CRUD ────────────────────────────────────────────────

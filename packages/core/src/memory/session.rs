@@ -32,6 +32,9 @@ pub struct SessionRow {
     pub visible: bool,
     pub created_at: i64,
     pub updated_at: i64,
+    /// 软删除时间戳：NULL=正常会话，非NULL=在回收站中。
+    /// 自动清理超过 30 天的回收站记录。
+    pub deleted_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,11 +101,44 @@ impl SessionStore {
         )?;
 
         Self::init_schema(&conn)?;
+        // 按需执行增量迁移（不破坏已有数据）
+        Self::run_migrations(&conn)?;
+
+        // 启动时清理超过 30 天的回收站数据
+        if let Ok(count) = Self::purge_expired_internal(&conn, 30) {
+            if count > 0 {
+                eprintln!("[xuflow] 启动时清理了 {} 条过期回收站记录", count);
+            }
+        }
 
         Ok(Self {
             conn: Mutex::new(conn),
             path,
         })
+    }
+
+    /// 增量迁移：为已有数据库添加新字段，不破坏现有数据。
+    fn run_migrations(conn: &Connection) -> Result<()> {
+        // v1 → v2：sessions 表增加 deleted_at 字段（回收站功能）
+        let has_deleted_at: bool = conn
+            .prepare("SELECT deleted_at FROM sessions LIMIT 0")
+            .is_ok();
+        if !has_deleted_at {
+            conn.execute_batch(
+                "ALTER TABLE sessions ADD COLUMN deleted_at INTEGER;",
+            )?;
+        }
+        Ok(())
+    }
+
+    /// 内部清理方法，供 open() 和 purge_expired_trash() 复用。
+    fn purge_expired_internal(conn: &Connection, retention_days: i64) -> Result<u64> {
+        let cutoff = ts_now() - retention_days * 24 * 3600 * 1000;
+        let affected = conn.execute(
+            "DELETE FROM sessions WHERE deleted_at IS NOT NULL AND deleted_at < ?1",
+            rusqlite::params![cutoff],
+        )?;
+        Ok(affected as u64)
     }
 
     /// 建表（CREATE TABLE IF NOT EXISTS，幂等）。
@@ -244,14 +280,15 @@ impl SessionStore {
             visible,
             created_at: now,
             updated_at: now,
+            deleted_at: None,
         })
     }
 
     pub fn list_sessions_by_project(&self, project_id: &str) -> Result<Vec<SessionRow>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, project_id, title, title_source, visible, created_at, updated_at \
-             FROM sessions WHERE project_id = ?1 ORDER BY updated_at DESC",
+            "SELECT id, project_id, title, title_source, visible, created_at, updated_at, deleted_at \
+             FROM sessions WHERE project_id = ?1 AND deleted_at IS NULL ORDER BY updated_at DESC",
         )?;
         let rows = stmt.query_map(rusqlite::params![project_id], |row| {
             let vis: i32 = row.get(4)?;
@@ -263,6 +300,7 @@ impl SessionStore {
                 visible: vis != 0,
                 created_at: row.get(5)?,
                 updated_at: row.get(6)?,
+                deleted_at: row.get(7)?,
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -271,8 +309,8 @@ impl SessionStore {
     pub fn list_all_sessions(&self) -> Result<Vec<SessionRow>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, project_id, title, title_source, visible, created_at, updated_at \
-             FROM sessions ORDER BY updated_at DESC",
+            "SELECT id, project_id, title, title_source, visible, created_at, updated_at, deleted_at \
+             FROM sessions WHERE deleted_at IS NULL ORDER BY updated_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
             let vis: i32 = row.get(4)?;
@@ -284,6 +322,7 @@ impl SessionStore {
                 visible: vis != 0,
                 created_at: row.get(5)?,
                 updated_at: row.get(6)?,
+                deleted_at: row.get(7)?,
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -313,6 +352,71 @@ impl SessionStore {
             rusqlite::params![now, id],
         )?;
         Ok(affected > 0)
+    }
+
+    // ── 回收站（软删除）────────────────────────────────────
+
+    /// 将指定会话移入回收站：设置 deleted_at 时间戳，不清除消息数据。
+    /// 前端侧边栏自动隐藏该会话，用户可在回收站中恢复或彻底删除。
+    pub fn soft_delete_session(&self, id: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let now = ts_now();
+        let affected = conn.execute(
+            "UPDATE sessions SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
+            rusqlite::params![now, now, id],
+        )?;
+        Ok(affected > 0)
+    }
+
+    /// 从回收站恢复会话：清除 deleted_at，重新出现在侧边栏。
+    pub fn restore_session(&self, id: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let now = ts_now();
+        let affected = conn.execute(
+            "UPDATE sessions SET deleted_at = NULL, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NOT NULL",
+            rusqlite::params![now, id],
+        )?;
+        Ok(affected > 0)
+    }
+
+    /// 彻底删除会话及关联消息（物理删除，不可恢复）。
+    pub fn permanent_delete_session(&self, id: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn.execute(
+            "DELETE FROM sessions WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
+        Ok(affected > 0)
+    }
+
+    /// 列出回收站中的所有会话，按删除时间倒序（最近删除的在前）。
+    pub fn list_trash_sessions(&self) -> Result<Vec<SessionRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, title, title_source, visible, created_at, updated_at, deleted_at \
+             FROM sessions WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let vis: i32 = row.get(4)?;
+            Ok(SessionRow {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                title: row.get(2)?,
+                title_source: row.get(3)?,
+                visible: vis != 0,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+                deleted_at: row.get(7)?,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// 清理超过指定天数的回收站记录，返回清理数量。
+    /// 启动时自动调用（保留 30 天），也支持用户手动触发。
+    pub fn purge_expired_trash(&self, retention_days: i64) -> Result<u64> {
+        let conn = self.conn.lock().unwrap();
+        Self::purge_expired_internal(&conn, retention_days)
     }
 
     // ── 消息 CRUD ───────────────────────────────────────────
@@ -756,4 +860,155 @@ fn default_data_dir() -> PathBuf {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn home_dir() -> Option<PathBuf> {
     std::env::var("HOME").ok().map(PathBuf::from)
+}
+
+// ── 测试 ─────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn open_test_store() -> SessionStore {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        SessionStore::open(Some(db_path)).unwrap()
+    }
+
+    #[test]
+    fn test_create_and_list_projects() {
+        let store = open_test_store();
+        store.create_project("p1", "Project One", "local").unwrap();
+        store.create_project("p2", "Project Two", "github").unwrap();
+        let projects = store.list_projects().unwrap();
+        assert_eq!(projects.len(), 2);
+        // 按 updated_at DESC 排列
+        assert_eq!(projects[0].name, "Project Two");
+    }
+
+    #[test]
+    fn test_update_and_delete_project() {
+        let store = open_test_store();
+        store.create_project("p1", "Old Name", "local").unwrap();
+        assert!(store.update_project_name("p1", "New Name").unwrap());
+        let projects = store.list_projects().unwrap();
+        assert_eq!(projects[0].name, "New Name");
+
+        assert!(store.delete_project("p1").unwrap());
+        assert!(store.list_projects().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_session_crud() {
+        let store = open_test_store();
+        store.create_project("p1", "Test Project", "local").unwrap();
+
+        // 创建
+        let session = store
+            .create_session("s1", "p1", "Test Session", "default", true)
+            .unwrap();
+        assert_eq!(session.title, "Test Session");
+        assert!(session.visible);
+        assert!(session.deleted_at.is_none());
+
+        // 更新标题
+        assert!(store.update_session_title("s1", "Updated Title").unwrap());
+
+        // 按项目列出
+        let sessions = store.list_sessions_by_project("p1").unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].title, "Updated Title");
+    }
+
+    #[test]
+    fn test_trash_flow() {
+        let store = open_test_store();
+        store.create_project("p1", "Test", "local").unwrap();
+        store.create_session("s1", "p1", "Session", "default", true).unwrap();
+
+        // 软删除 → 移入回收站
+        assert!(store.soft_delete_session("s1").unwrap());
+
+        // 正常列出不再显示
+        assert!(store.list_sessions_by_project("p1").unwrap().is_empty());
+
+        // 回收站中可见
+        let trash = store.list_trash_sessions().unwrap();
+        assert_eq!(trash.len(), 1);
+        assert!(trash[0].deleted_at.is_some());
+
+        // 恢复
+        assert!(store.restore_session("s1").unwrap());
+        assert!(store.list_trash_sessions().unwrap().is_empty());
+        assert_eq!(store.list_sessions_by_project("p1").unwrap().len(), 1);
+
+        // 再次软删除后永久删除
+        store.soft_delete_session("s1").unwrap();
+        assert!(store.permanent_delete_session("s1").unwrap());
+        assert!(store.list_trash_sessions().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_messages_crud() {
+        let store = open_test_store();
+        store.create_project("p1", "Test", "local").unwrap();
+        store.create_session("s1", "p1", "Chat", "default", true).unwrap();
+
+        // 添加消息
+        let msg = store.add_message("s1", "user", "Hello", false, None, None).unwrap();
+        assert_eq!(msg.role, "user");
+        assert_eq!(msg.content, "Hello");
+
+        store.add_message("s1", "assistant", "Hi there!", true, None, None).unwrap();
+
+        // 读取
+        let msgs = store.get_messages("s1").unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].content, "Hello");
+        assert_eq!(msgs[1].content, "Hi there!");
+
+        // 清空
+        let cleared = store.clear_messages("s1").unwrap();
+        assert_eq!(cleared, 2);
+        assert!(store.get_messages("s1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_config_read_write() {
+        let store = open_test_store();
+        assert!(store.get_config("foo").unwrap().is_none());
+
+        store.set_config("foo", "bar").unwrap();
+        assert_eq!(store.get_config("foo").unwrap(), Some("bar".to_string()));
+
+        store.set_config("foo", "baz").unwrap();
+        assert_eq!(store.get_config("foo").unwrap(), Some("baz".to_string()));
+
+        assert!(store.delete_config("foo").unwrap());
+        assert!(store.get_config("foo").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_purge_expired_trash() {
+        let store = open_test_store();
+        store.create_project("p1", "Test", "local").unwrap();
+        store.create_session("s1", "p1", "Session", "default", true).unwrap();
+        store.soft_delete_session("s1").unwrap();
+
+        // 保留天数设为 0 → 立即清理所有回收站记录
+        let purged = store.purge_expired_trash(0).unwrap();
+        assert_eq!(purged, 1);
+        assert!(store.list_trash_sessions().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_delete_project_cascades_to_sessions() {
+        let store = open_test_store();
+        store.create_project("p1", "Test", "local").unwrap();
+        store.create_session("s1", "p1", "Chat", "default", true).unwrap();
+        store.add_message("s1", "user", "Hello", false, None, None).unwrap();
+
+        // 删除项目 → 级联删除会话和消息（FOREIGN KEY ON DELETE CASCADE）
+        store.delete_project("p1").unwrap();
+        assert!(store.list_sessions_by_project("p1").unwrap().is_empty());
+    }
 }

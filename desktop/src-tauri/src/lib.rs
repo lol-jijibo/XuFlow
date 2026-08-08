@@ -2,7 +2,7 @@ pub mod commands;
 
 use std::sync::Arc;
 use tauri::Manager;
-use commands::chat::AgentSession;
+use commands::chat::SessionManager;
 use commands::persistence::DbState;
 use xuflow_core::SessionStore;
 
@@ -12,17 +12,14 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle().clone();
-            // Agent 会话 — 占位凭证，前端必须调用 configure_agent 后发消息。
-            let session = AgentSession::new(
-                String::from(""),
-                String::from("deepseek-v4-pro"),
-                String::from("deepseek"),
-                handle,
-            );
-            app.manage(Arc::new(session));
+            // 会话管理器 — 维护多会话 AgentLoop 池，支持并行对话。
+            let session_manager = SessionManager::new(handle);
+            app.manage(Arc::new(session_manager));
 
-            // SQLite 数据库 — 存储在项目目录下，集中管理。
-            let db_path = std::path::PathBuf::from(r"D:\Projects-star\Xuflow\XuFlow-sqlite_content\xuflow.db");
+            // SQLite 数据库 — 使用 Tauri 跨平台应用数据目录，自动创建父目录。
+            let db_path = app.path().app_data_dir()
+                .expect("无法解析应用数据目录")
+                .join("xuflow.db");
             let store = SessionStore::open(Some(db_path))
                 .expect("无法初始化 SQLite 数据库");
             let db_state = Arc::new(DbState {
@@ -42,6 +39,9 @@ pub fn run() {
             commands::chat::generate_title,
             commands::chat::set_context_window,
             commands::chat::set_min_user_turns,
+            // 会话生命周期
+            commands::chat::restore_session,
+            commands::chat::close_session,
             // Git 审查相关
             commands::git::git_diff_raw,
             commands::git::git_status_raw,
@@ -70,6 +70,11 @@ pub fn run() {
             commands::persistence::db_update_session_title,
             commands::persistence::db_delete_session,
             commands::persistence::db_reveal_session,
+            // 回收站操作
+            commands::persistence::db_restore_session,
+            commands::persistence::db_permanent_delete_session,
+            commands::persistence::db_list_trash_sessions,
+            commands::persistence::db_purge_expired_trash,
             // 消息 CRUD
             commands::persistence::db_add_message,
             commands::persistence::db_update_message,

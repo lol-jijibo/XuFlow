@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Emitter;
@@ -12,7 +13,7 @@ use xuflow_core::{
     backends::kimi::KimiBackend,
     backends::volcengine::VolcEngineBackend,
     mcp::McpManager,
-    tools::{bash::BashTool, edit::EditFileTool, file::{ReadFileTool, WriteFileTool, ListDirTool}, git::{GitStatusTool, GitDiffTool, GitLogTool, GitAddTool, GitCommitTool}, glob::GlobTool, grep::GrepTool, todo::{TodoWriteTool, ProposePlanTool}, web::WebFetchTool, web_crawl::WebCrawlTool, web_search::WebSearchTool, ToolRegistry},
+    tools::{bash::BashTool, edit::EditFileTool, file::{ReadFileTool, WriteFileTool, ListDirTool}, git::{GitStatusTool, GitDiffTool, GitLogTool, GitAddTool, GitCommitTool}, glob::GlobTool, grep::GrepTool, patch::ApplyPatchTool, todo::{TodoWriteTool, ProposePlanTool}, web::WebFetchTool, web_crawl::WebCrawlTool, web_search::WebSearchTool, ToolRegistry},
 };
 
 // ---------------------------------------------------------------------------
@@ -57,124 +58,73 @@ impl ApprovalHandler for TauriApprovalHandler {
     }
 }
 
-/// Tauri command: called by the frontend when the user approves or rejects.
-#[tauri::command]
-pub async fn respond_approval(
-    approved: bool,
-    state: tauri::State<'_, Arc<AgentSession>>,
-) -> Result<(), String> {
-    let mut guard = state.approval_tx.lock().await;
-    if let Some(tx) = guard.take() {
-        let _ = tx.send(approved);
-    }
-    Ok(())
+// ---------------------------------------------------------------------------
+// Per-session handle — each conversation gets its own AgentLoop
+// ---------------------------------------------------------------------------
+
+/// 单个会话的运行时状态：独立的消息历史、取消标志、审批通道。
+/// 不同会话可并行运行，互不阻塞。
+struct SessionHandle {
+    agent: Mutex<AgentLoop>,
+    cancelled: Arc<AtomicBool>,
+    approval_tx: ApprovalChannel,
 }
 
 // ---------------------------------------------------------------------------
-// Agent session
+// Global config — updated by configure_agent, read when creating new sessions
 // ---------------------------------------------------------------------------
 
-pub struct AgentSession {
-    pub agent: Mutex<AgentLoop>,
-    /// 取消标志：Arc 包装以在 AgentSession 与 AgentLoop 之间共享。
-    /// stop_generation 写入 → AgentLoop::run() 轮询读取，实现即时中止。
-    pub cancelled: Arc<AtomicBool>,
-    /// Shared approval channel — also held by TauriApprovalHandler.
-    pub approval_tx: ApprovalChannel,
-    /// MCP 连接管理器，应用关闭时需调用 shutdown
-    /// 使用 Option 以支持在 configure_agent 中延迟初始化
-    pub mcp_manager: Arc<Mutex<Option<Arc<McpManager>>>>,
-    /// MCP 初始化时的警告/错误信息，供前端展示
-    pub mcp_init_errors: Arc<Mutex<Vec<String>>>,
+#[derive(Clone)]
+struct GlobalConfig {
+    api_key: String,
+    model: String,
+    provider: String,
 }
 
-impl AgentSession {
-    /// Create a new session. Call `configure_agent` from the frontend to set
-    /// real credentials and initialize MCP connections before the first `send_message`.
-    pub fn new(api_key: String, model: String, provider: String, app_handle: tauri::AppHandle) -> Self {
-        let approval_tx: ApprovalChannel = Arc::new(Mutex::new(None));
+// ---------------------------------------------------------------------------
+// Session manager — replaces the old single AgentSession
+// ---------------------------------------------------------------------------
 
+/// 会话管理器：按 sessionId 维护多个 AgentLoop 实例的池。
+/// 每个会话独立持有消息历史、取消标志和审批通道，支持并行运行。
+/// MCP 管理器和应用配置全局共享。
+pub struct SessionManager {
+    /// 活跃会话池：sessionId → Handle
+    sessions: Mutex<HashMap<String, Arc<SessionHandle>>>,
+    /// 全局凭证和模型选择（configure_agent 更新，新建会话时消费）
+    global_config: Mutex<GlobalConfig>,
+    /// 全局 MCP 管理器（所有会话共享，首次 configure_agent 时初始化）
+    mcp_manager: Arc<Mutex<Option<Arc<McpManager>>>>,
+    /// MCP 初始化警告/错误信息
+    mcp_init_errors: Arc<Mutex<Vec<String>>>,
+    /// AppHandle 克隆（事件发射和 approval handler 使用）
+    app_handle: tauri::AppHandle,
+    /// 工作目录
+    working_dir: String,
+}
+
+impl SessionManager {
+    /// 创建新的会话管理器。前端必须在首次 send_message 前调用 configure_agent 设置凭证。
+    pub fn new(app_handle: tauri::AppHandle) -> Self {
         let working_dir = std::env::current_dir()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| ".".to_string());
 
-        let backend = Self::build_backend(&provider, &model, &api_key);
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let agent = Self::build_agent(
-            backend,
-            app_handle.clone(),
-            approval_tx.clone(),
-            &working_dir,
-            None, // MCP 将在 configure_agent 中延迟加载
-            cancelled.clone(),
-        );
-
         Self {
-            agent: Mutex::new(agent),
-            cancelled,
-            approval_tx,
+            sessions: Mutex::new(HashMap::new()),
+            global_config: Mutex::new(GlobalConfig {
+                api_key: String::new(),
+                model: "deepseek-v4-pro".into(),
+                provider: "deepseek".into(),
+            }),
             mcp_manager: Arc::new(Mutex::new(None)),
             mcp_init_errors: Arc::new(Mutex::new(Vec::new())),
+            app_handle,
+            working_dir,
         }
     }
 
-    /// Rebuild the backend and agent loop with new credentials / model.
-    /// On first call, also initializes MCP connections from config files.
-    /// mcp_config_path: 可选的自定义 MCP 配置文件路径（前端设置页传入）
-    pub async fn reconfigure(
-        &self,
-        api_key: String,
-        model: String,
-        provider: String,
-        app_handle: tauri::AppHandle,
-        mcp_config_path: Option<String>,
-    ) {
-        let working_dir = std::env::current_dir()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| ".".to_string());
-
-        // 延迟初始化 MCP：首次调用 configure_agent 时加载
-        // 后续调用不再重复加载，保持已建立的连接
-        let mcp_opt = {
-            let mut guard = self.mcp_manager.lock().await;
-            if guard.is_none() {
-                // 加载 MCP 配置：前端传入 > 环境变量 > 默认路径 + 项目级
-                let (manager, init_errors) = McpManager::load_with_resolution(
-                    mcp_config_path.as_deref().map(std::path::Path::new),
-                    Some(std::path::Path::new(&working_dir)),
-                )
-                .await;
-
-                // 收集初始化警告
-                let mut errors_guard = self.mcp_init_errors.lock().await;
-                errors_guard.clear();
-                for err in &init_errors {
-                    if err.server_name.is_empty() {
-                        errors_guard.push(err.message.clone());
-                    } else {
-                        errors_guard.push(format!(
-                            "MCP Server '{}': {}",
-                            err.server_name, err.message
-                        ));
-                    }
-                }
-
-                *guard = Some(Arc::new(manager));
-            }
-            guard.clone()
-        };
-
-        let backend = Self::build_backend(&provider, &model, &api_key);
-        let agent = Self::build_agent(
-            backend,
-            app_handle,
-            self.approval_tx.clone(),
-            &working_dir,
-            mcp_opt,
-            self.cancelled.clone(),
-        );
-        *self.agent.lock().await = agent;
-    }
+    // ── Backend / Agent 构造（静态方法，不依赖 self）──────────────────
 
     fn build_backend(provider: &str, model: &str, api_key: &str) -> Arc<dyn LlmBackend> {
         match provider {
@@ -196,6 +146,7 @@ impl AgentSession {
         registry.register(Box::new(ReadFileTool));
         registry.register(Box::new(WriteFileTool));
         registry.register(Box::new(EditFileTool));
+        registry.register(Box::new(ApplyPatchTool));
         registry.register(Box::new(ListDirTool));
         registry.register(Box::new(GrepTool));
         registry.register(Box::new(BashTool));
@@ -225,78 +176,236 @@ impl AgentSession {
             .with_system_prompt(&system_prompt)
             .with_cancellation(cancelled)
     }
+
+    // ── Session lifecycle ──────────────────────────────────────────────
+
+    /// 获取或创建指定 sessionId 的会话 Handle。
+    /// 如果会话已存在则直接返回，否则从全局配置构造新的 AgentLoop。
+    /// messages 用于恢复已有会话的消息历史（空 Vec 表示新会话）。
+    async fn get_or_create_session(
+        &self,
+        session_id: &str,
+        messages: Vec<ChatMessage>,
+    ) -> Arc<SessionHandle> {
+        let mut sessions = self.sessions.lock().await;
+
+        if let Some(handle) = sessions.get(session_id) {
+            return handle.clone();
+        }
+
+        // 构造新会话
+        let cfg = self.global_config.lock().await.clone();
+        let mcp = self.mcp_manager.lock().await.clone();
+        let backend = Self::build_backend(&cfg.provider, &cfg.model, &cfg.api_key);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let approval_tx: ApprovalChannel = Arc::new(Mutex::new(None));
+
+        let agent = if messages.is_empty() {
+            Self::build_agent(
+                backend,
+                self.app_handle.clone(),
+                approval_tx.clone(),
+                &self.working_dir,
+                mcp,
+                cancelled.clone(),
+            )
+        } else {
+            Self::build_agent(
+                backend,
+                self.app_handle.clone(),
+                approval_tx.clone(),
+                &self.working_dir,
+                mcp,
+                cancelled.clone(),
+            )
+            .with_messages(messages)
+        };
+
+        let handle = Arc::new(SessionHandle {
+            agent: Mutex::new(agent),
+            cancelled,
+            approval_tx,
+        });
+
+        sessions.insert(session_id.to_string(), handle.clone());
+        handle
+    }
+
+    /// 清理指定会话，释放内存和 AgentLoop 资源。
+    async fn remove_session(&self, session_id: &str) {
+        let mut sessions = self.sessions.lock().await;
+        // 先设置取消标志，让正在运行的 AgentLoop 感知并退出
+        if let Some(handle) = sessions.get(session_id) {
+            handle.cancelled.store(true, Ordering::SeqCst);
+        }
+        sessions.remove(session_id);
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
 
-/// Called by the frontend to push credentials & model selection to the backend.
-/// Must be invoked at least once before `send_message`, and again whenever the
-/// user changes provider / model / API key.
-/// mcp_config_path: 可选的自定义 MCP 配置文件路径（从设置页传入）
+/// 推送凭证和模型选择到后端，并在首次调用时初始化 MCP 连接。
+/// 必须在 send_message 之前至少调用一次；用户修改设置后也应调用。
 #[tauri::command]
 pub async fn configure_agent(
     api_key: String,
     provider: String,
     model: String,
-    state: tauri::State<'_, Arc<AgentSession>>,
+    state: tauri::State<'_, Arc<SessionManager>>,
     app: tauri::AppHandle,
     mcp_config_path: Option<String>,
 ) -> Result<(), String> {
-    state.reconfigure(api_key, model, provider, app, mcp_config_path).await;
+    // 更新全局配置
+    {
+        let mut cfg = state.global_config.lock().await;
+        cfg.api_key = api_key;
+        cfg.model = model;
+        cfg.provider = provider;
+    }
+
+    // 首次调用时延迟初始化 MCP，后续不重复加载
+    let mcp_needs_init = {
+        let guard = state.mcp_manager.lock().await;
+        guard.is_none()
+    };
+
+    if mcp_needs_init {
+        let (manager, init_errors) = McpManager::load_with_resolution(
+            mcp_config_path.as_deref().map(std::path::Path::new),
+            Some(std::path::Path::new(&state.working_dir)),
+        )
+        .await;
+
+        // 收集初始化警告
+        let mut errors_guard = state.mcp_init_errors.lock().await;
+        errors_guard.clear();
+        for err in &init_errors {
+            if err.server_name.is_empty() {
+                errors_guard.push(err.message.clone());
+            } else {
+                errors_guard.push(format!(
+                    "MCP Server '{}': {}",
+                    err.server_name, err.message
+                ));
+            }
+        }
+
+        *state.mcp_manager.lock().await = Some(Arc::new(manager));
+    }
+
+    // 让 MCP init errors 可用（后续可添加查询命令）
+    let _ = app;
+
+    Ok(())
+}
+
+/// 从 SQLite 恢复会话的消息历史并创建/替换后端 AgentLoop。
+/// 前端在切换到已有会话时调用，确保后端持有完整上下文。
+#[tauri::command]
+pub async fn restore_session(
+    session_id: String,
+    messages_json: String,
+    state: tauri::State<'_, Arc<SessionManager>>,
+) -> Result<(), String> {
+    // 解析前端传来的消息列表
+    let raw_msgs: Vec<serde_json::Value> =
+        serde_json::from_str(&messages_json).map_err(|e| format!("Invalid messages JSON: {}", e))?;
+
+    // 转换为 ChatMessage 格式
+    // 恢复时保留 role + content，tool_call 相关字段暂不还原（简化处理）
+    let chat_messages: Vec<ChatMessage> = raw_msgs
+        .iter()
+        .map(|m| ChatMessage {
+            role: m.get("role").and_then(|v| v.as_str()).unwrap_or("user").to_string(),
+            content: m.get("content").cloned(),
+            tool_calls: None,
+            tool_call_id: None,
+        })
+        .collect();
+
+    // 移除旧会话（如果存在），用新消息历史重建
+    state.remove_session(&session_id).await;
+
+    // 通过 get_or_create 重建（带消息历史）
+    state.get_or_create_session(&session_id, chat_messages).await;
+
+    Ok(())
+}
+
+/// 关闭并清理指定会话的后端资源。
+/// 前端在切换走一个会话后延迟调用（5s），避免频繁切换导致反复重建。
+#[tauri::command]
+pub async fn close_session(
+    session_id: String,
+    state: tauri::State<'_, Arc<SessionManager>>,
+) -> Result<(), String> {
+    state.remove_session(&session_id).await;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn send_message(
+    session_id: String,
     content: String,
-    state: tauri::State<'_, Arc<AgentSession>>,
+    state: tauri::State<'_, Arc<SessionManager>>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    // Reset cancellation
-    state.cancelled.store(false, Ordering::SeqCst);
+    // 获取或创建会话（新会话无历史消息）
+    let handle = state.get_or_create_session(&session_id, vec![]).await;
+
+    // 重置取消标志
+    handle.cancelled.store(false, Ordering::SeqCst);
 
     let (tx, mut rx) = mpsc::channel::<StreamEvent>(256);
 
-    // Spawn event forwarder — clone the Arc so we can read cancelled
-    let session = state.inner().clone();
+    // 事件转发器 —— 所有 payload 附带 session_id 以便前端过滤
+    let cancelled = handle.cancelled.clone();
     let app_clone = app.clone();
+    let sid = session_id.clone();
     let forward_handle = tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
-            if session.cancelled.load(Ordering::SeqCst) {
+            if cancelled.load(Ordering::SeqCst) {
                 break;
             }
             match &event {
                 StreamEvent::TextDelta { delta } => {
-                    let _ = app_clone.emit("agent:text-delta", delta);
+                    let payload = serde_json::json!({ "session_id": sid, "delta": delta });
+                    let _ = app_clone.emit("agent:text-delta", payload.to_string());
                 }
                 StreamEvent::ReasoningDelta { delta } => {
-                    let _ = app_clone.emit("agent:reasoning-delta", delta);
+                    let payload = serde_json::json!({ "session_id": sid, "delta": delta });
+                    let _ = app_clone.emit("agent:reasoning-delta", payload.to_string());
                 }
                 StreamEvent::ReasoningDone => {
-                    let _ = app_clone.emit("agent:reasoning-done", "");
+                    let payload = serde_json::json!({ "session_id": sid });
+                    let _ = app_clone.emit("agent:reasoning-done", payload.to_string());
                 }
                 StreamEvent::ToolCall { id, name, arguments } => {
                     let payload = serde_json::json!({
+                        "session_id": sid,
                         "id": id, "name": name, "arguments": arguments
                     });
                     let _ = app_clone.emit("agent:tool-call", payload.to_string());
                 }
                 StreamEvent::ToolResult { id, content } => {
                     let payload = serde_json::json!({
+                        "session_id": sid,
                         "id": id, "content": content
                     });
                     let _ = app_clone.emit("agent:tool-result", payload.to_string());
                 }
                 StreamEvent::ApprovalRequired { tool, params } => {
                     let payload = serde_json::json!({
+                        "session_id": sid,
                         "tool": tool, "params": params
                     });
                     let _ = app_clone.emit("agent:approval-required", payload.to_string());
                 }
                 StreamEvent::TokenUsage { phase, estimated, actual, context_window, context_remaining } => {
                     let payload = serde_json::json!({
+                        "session_id": sid,
                         "phase": phase,
                         "estimated": estimated,
                         "actual": actual,
@@ -307,6 +416,7 @@ pub async fn send_message(
                 }
                 StreamEvent::ContextTrimmed { rounds_removed, tokens_freed, current_usage_percent, context_window } => {
                     let payload = serde_json::json!({
+                        "session_id": sid,
                         "rounds_removed": rounds_removed,
                         "tokens_freed": tokens_freed,
                         "current_usage_percent": current_usage_percent,
@@ -314,8 +424,17 @@ pub async fn send_message(
                     });
                     let _ = app_clone.emit("agent:context-trimmed", payload.to_string());
                 }
+                StreamEvent::ContextSummarized { turns_summarized, summary_length } => {
+                    let payload = serde_json::json!({
+                        "session_id": sid,
+                        "turns_summarized": turns_summarized,
+                        "summary_length": summary_length,
+                    });
+                    let _ = app_clone.emit("agent:context-summarized", payload.to_string());
+                }
                 StreamEvent::Done { usage } => {
                     let payload = serde_json::json!({
+                        "session_id": sid,
                         "v": 1,
                         "usage": {
                             "prompt_tokens": usage.prompt_tokens,
@@ -326,14 +445,22 @@ pub async fn send_message(
                     let _ = app_clone.emit("agent:done", payload.to_string());
                 }
                 StreamEvent::Error { message } => {
-                    let _ = app_clone.emit("agent:error", message);
+                    let payload = serde_json::json!({
+                        "session_id": sid,
+                        "message": message
+                    });
+                    let _ = app_clone.emit("agent:error", payload.to_string());
                 }
                 StreamEvent::TodoUpdate { todos } => {
-                    let payload = serde_json::to_string(todos).unwrap_or_default();
-                    let _ = app_clone.emit("agent:todo-update", payload);
+                    let payload = serde_json::json!({
+                        "session_id": sid,
+                        "todos": todos
+                    });
+                    let _ = app_clone.emit("agent:todo-update", payload.to_string());
                 }
                 StreamEvent::PlanProposed { title, steps, files_to_modify } => {
                     let payload = serde_json::json!({
+                        "session_id": sid,
                         "title": title,
                         "steps": steps,
                         "files_to_modify": files_to_modify,
@@ -344,9 +471,9 @@ pub async fn send_message(
         }
     });
 
-    // Run the agent
+    // 运行 AgentLoop
     let agent_result = {
-        let mut agent_guard = state.agent.lock().await;
+        let mut agent_guard = handle.agent.lock().await;
         agent_guard.run(content, tx).await
     };
 
@@ -369,11 +496,25 @@ pub fn get_env_api_keys() -> Result<serde_json::Value, String> {
     }))
 }
 
+/// 停止指定会话的生成。session_id 为空时停止所有会话。
 #[tauri::command]
 pub async fn stop_generation(
-    state: tauri::State<'_, Arc<AgentSession>>,
+    session_id: Option<String>,
+    state: tauri::State<'_, Arc<SessionManager>>,
 ) -> Result<(), String> {
-    state.cancelled.store(true, Ordering::SeqCst);
+    if let Some(sid) = session_id {
+        // 取消指定会话
+        let sessions = state.sessions.lock().await;
+        if let Some(handle) = sessions.get(&sid) {
+            handle.cancelled.store(true, Ordering::SeqCst);
+        }
+    } else {
+        // 向后兼容：无 sessionId 时取消所有会话
+        let sessions = state.sessions.lock().await;
+        for handle in sessions.values() {
+            handle.cancelled.store(true, Ordering::SeqCst);
+        }
+    }
     Ok(())
 }
 
@@ -381,25 +522,50 @@ pub async fn stop_generation(
 // Context management commands
 // ---------------------------------------------------------------------------
 
-/// Set the context window size for the active agent.
+/// Set the context window size for the specified session's agent.
 #[tauri::command]
 pub async fn set_context_window(
+    session_id: String,
     context_window: u32,
-    state: tauri::State<'_, Arc<AgentSession>>,
+    state: tauri::State<'_, Arc<SessionManager>>,
 ) -> Result<(), String> {
-    let mut agent = state.agent.lock().await;
-    agent.set_context_window(context_window);
+    let sessions = state.sessions.lock().await;
+    if let Some(handle) = sessions.get(&session_id) {
+        let mut agent = handle.agent.lock().await;
+        agent.set_context_window(context_window);
+    }
     Ok(())
 }
 
 /// Set the minimum user turns to preserve during context trimming.
 #[tauri::command]
 pub async fn set_min_user_turns(
+    session_id: String,
     min_turns: u32,
-    state: tauri::State<'_, Arc<AgentSession>>,
+    state: tauri::State<'_, Arc<SessionManager>>,
 ) -> Result<(), String> {
-    let mut agent = state.agent.lock().await;
-    agent.set_min_user_turns(min_turns);
+    let sessions = state.sessions.lock().await;
+    if let Some(handle) = sessions.get(&session_id) {
+        let mut agent = handle.agent.lock().await;
+        agent.set_min_user_turns(min_turns);
+    }
+    Ok(())
+}
+
+/// 响应审批请求（指定会话）。
+#[tauri::command]
+pub async fn respond_approval(
+    session_id: String,
+    approved: bool,
+    state: tauri::State<'_, Arc<SessionManager>>,
+) -> Result<(), String> {
+    let sessions = state.sessions.lock().await;
+    if let Some(handle) = sessions.get(&session_id) {
+        let mut guard = handle.approval_tx.lock().await;
+        if let Some(tx) = guard.take() {
+            let _ = tx.send(approved);
+        }
+    }
     Ok(())
 }
 
@@ -460,7 +626,6 @@ fn build_summary_prompt(messages_json: &str) -> Result<(String, String), String>
 
     if user_msgs.len() == 1 {
         let content = user_msgs[0].content.trim();
-        // Short prompts don't need LLM — handled on frontend, but if we get here:
         let user_prompt = format!(
             "Generate a short title (max 30 chars) for a conversation that starts with this query:\n\n{content}\n\nTitle:"
         );
@@ -492,10 +657,11 @@ fn build_summary_prompt(messages_json: &str) -> Result<(String, String), String>
 
 /// Generate a conversation title by summarizing the message history.
 /// Called by the frontend after each complete agent response.
+/// 使用全局配置构造临时 backend，不依赖特定会话的 AgentLoop。
 #[tauri::command]
 pub async fn generate_title(
     messages_json: String,
-    state: tauri::State<'_, Arc<AgentSession>>,
+    state: tauri::State<'_, Arc<SessionManager>>,
 ) -> Result<String, String> {
     let (system_prompt, user_prompt) = build_summary_prompt(&messages_json)?;
 
@@ -514,10 +680,9 @@ pub async fn generate_title(
         },
     ];
 
-    let backend = {
-        let agent = state.agent.lock().await;
-        agent.backend().clone()
-    };
+    // 使用全局配置构造临时后端，生成标题
+    let cfg = state.global_config.lock().await.clone();
+    let backend = SessionManager::build_backend(&cfg.provider, &cfg.model, &cfg.api_key);
 
     simple_completion(&backend, messages).await
 }

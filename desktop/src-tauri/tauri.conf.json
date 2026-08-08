@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "XuFlow",
-        "width": 1440,
-        "height": 900,
+        "width": 1340,
+        "height": 850,
         "minWidth": 600,
         "minHeight": 400,
         "center": true,

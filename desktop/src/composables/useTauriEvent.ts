@@ -1,5 +1,5 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useAgentStore, ToolCall, ToolResult, type TodoItem, type PlanProposal } from "../stores/agent";
+import { useAgentStore, type ToolCall, type ToolResult, type TodoItem, type PlanProposal } from "../stores/agent";
 import { useProjectStore, type ToolCallEntry } from "../stores/project";
 import { trySummarizeConversation } from "./useConversationSummary";
 
@@ -119,9 +119,11 @@ export function useTauriEvent() {
     // ── Streaming text deltas ──
     unlisteners.push(
       await listen<string>("agent:text-delta", (event) => {
+        const p = JSON.parse(event.payload);
+        if (p.session_id !== projectStore.activeConversationId) return;
         const msg = lastStreamingMsg();
         if (!msg) return;
-        msg.content += event.payload;
+        msg.content += p.delta;
         schedulePersist();
       })
     );
@@ -131,19 +133,23 @@ export function useTauriEvent() {
     // 否则 ReasoningBlock 会在思考仍在流式输出时显示"思考已完成"。
     unlisteners.push(
       await listen<string>("agent:reasoning-delta", (event) => {
+        const p = JSON.parse(event.payload);
+        if (p.session_id !== projectStore.activeConversationId) return;
         const msg = lastStreamingMsg();
         if (!msg) return;
         if (msg.reasoning === undefined) msg.reasoning = "";
         // 新一轮思考开始：清除上一轮的完成标记，让 UI 正确显示"思考中..."
         if (msg.reasoningDone) msg.reasoningDone = false;
-        msg.reasoning += event.payload;
+        msg.reasoning += p.delta;
         schedulePersist();
       })
     );
 
     // ── Reasoning complete ──
     unlisteners.push(
-      await listen<string>("agent:reasoning-done", (_event) => {
+      await listen<string>("agent:reasoning-done", (event) => {
+        const p = JSON.parse(event.payload);
+        if (p.session_id !== projectStore.activeConversationId) return;
         const msg = lastStreamingMsg();
         if (!msg) return;
         msg.reasoningDone = true;
@@ -154,7 +160,9 @@ export function useTauriEvent() {
     // ── Tool call started ──
     unlisteners.push(
       await listen<string>("agent:tool-call", (event) => {
-        const tc: ToolCall = JSON.parse(event.payload);
+        const p = JSON.parse(event.payload);
+        if (p.session_id !== projectStore.activeConversationId) return;
+        const tc: ToolCall = { id: p.id, name: p.name, arguments: p.arguments };
         const msg = lastStreamingMsg();
         if (!msg) return;
         const toolCalls = ensureToolCalls(msg);
@@ -186,13 +194,14 @@ export function useTauriEvent() {
     // ── Tool result received ──
     unlisteners.push(
       await listen<string>("agent:tool-result", (event) => {
-        const tr: ToolResult = JSON.parse(event.payload);
+        const p = JSON.parse(event.payload);
+        if (p.session_id !== projectStore.activeConversationId) return;
         const msg = lastStreamingMsg();
         if (!msg || !msg.toolCalls) return;
 
-        const entry = msg.toolCalls.find((t) => t.id === tr.id);
+        const entry = msg.toolCalls.find((t) => t.id === p.id);
         if (entry) {
-          entry.result = tr.content;
+          entry.result = p.content;
           entry.resultDone = true;
         }
         schedulePersist();
@@ -202,8 +211,9 @@ export function useTauriEvent() {
     // ── Approval required ──
     unlisteners.push(
       await listen<string>("agent:approval-required", (event) => {
-        const approval = JSON.parse(event.payload);
-        agentStore.pendingApproval = approval;
+        const p = JSON.parse(event.payload);
+        if (p.session_id !== projectStore.activeConversationId) return;
+        agentStore.pendingApproval = { tool: p.tool, params: p.params };
       })
     );
 
@@ -211,8 +221,9 @@ export function useTauriEvent() {
     unlisteners.push(
       await listen<string>("agent:todo-update", (event) => {
         try {
-          const todos: TodoItem[] = JSON.parse(event.payload);
-          agentStore.todos = todos;
+          const p = JSON.parse(event.payload);
+          if (p.session_id !== projectStore.activeConversationId) return;
+          agentStore.todos = p.todos;
         } catch { /* ignore parse errors */ }
       })
     );
@@ -221,8 +232,13 @@ export function useTauriEvent() {
     unlisteners.push(
       await listen<string>("agent:plan-proposed", (event) => {
         try {
-          const plan: PlanProposal = JSON.parse(event.payload);
-          agentStore.pendingPlan = plan;
+          const p = JSON.parse(event.payload);
+          if (p.session_id !== projectStore.activeConversationId) return;
+          agentStore.pendingPlan = {
+            title: p.title,
+            steps: p.steps,
+            files_to_modify: p.files_to_modify,
+          };
         } catch { /* ignore parse errors */ }
       })
     );
@@ -231,18 +247,19 @@ export function useTauriEvent() {
     unlisteners.push(
       await listen<string>("agent:token-usage", (event) => {
         try {
-          const d = JSON.parse(event.payload);
-          if (d.phase === "before") {
-            agentStore.tokenUsage = d.estimated;
-          } else if (d.phase === "after") {
-            if (d.actual != null) {
-              agentStore.tokenActual = d.actual;
+          const p = JSON.parse(event.payload);
+          if (p.session_id !== projectStore.activeConversationId) return;
+          if (p.phase === "before") {
+            agentStore.tokenUsage = p.estimated;
+          } else if (p.phase === "after") {
+            if (p.actual != null) {
+              agentStore.tokenActual = p.actual;
               // Calibrate: use the larger of estimated vs actual
-              agentStore.tokenUsage = Math.max(d.estimated, d.actual);
+              agentStore.tokenUsage = Math.max(p.estimated, p.actual);
             }
           }
-          agentStore.contextWindow = d.context_window ?? agentStore.contextWindow;
-          agentStore.contextRemaining = d.context_remaining ?? (agentStore.contextWindow - agentStore.tokenUsage);
+          agentStore.contextWindow = p.context_window ?? agentStore.contextWindow;
+          agentStore.contextRemaining = p.context_remaining ?? (agentStore.contextWindow - agentStore.tokenUsage);
         } catch { /* ignore parse errors */ }
       })
     );
@@ -251,13 +268,14 @@ export function useTauriEvent() {
     unlisteners.push(
       await listen<string>("agent:context-trimmed", (event) => {
         try {
-          const d = JSON.parse(event.payload);
+          const p = JSON.parse(event.payload);
+          if (p.session_id !== projectStore.activeConversationId) return;
           agentStore.contextTrimmed = true;
           agentStore.trimMeta = {
-            roundsRemoved: d.rounds_removed ?? 0,
-            tokensFreed: d.tokens_freed ?? 0,
+            roundsRemoved: p.rounds_removed ?? 0,
+            tokensFreed: p.tokens_freed ?? 0,
           };
-          agentStore.contextWindow = d.context_window ?? agentStore.contextWindow;
+          agentStore.contextWindow = p.context_window ?? agentStore.contextWindow;
           // Auto-clear the transient badge after 3 seconds
           setTimeout(() => {
             agentStore.contextTrimmed = false;
@@ -269,9 +287,10 @@ export function useTauriEvent() {
     // ── Agent loop done ──
     unlisteners.push(
       await listen<string>("agent:done", async (event) => {
+        const p = JSON.parse(event.payload);
+        if (p.session_id !== projectStore.activeConversationId) return;
         // Version-aware usage parsing (v=1: { v: 1, usage: { total_tokens, ... } })
         try {
-          const p = JSON.parse(event.payload);
           if (p.v === 1 && p.usage?.total_tokens != null) {
             agentStore.tokenUsage = p.usage.total_tokens;
             agentStore.tokenActual = p.usage.total_tokens;
@@ -321,13 +340,15 @@ export function useTauriEvent() {
     // ── Agent error ──
     unlisteners.push(
       await listen<string>("agent:error", (event) => {
+        const p = JSON.parse(event.payload);
+        if (p.session_id !== projectStore.activeConversationId) return;
         const conv = projectStore.activeConversation;
         const project = projectStore.activeProject;
         if (conv) {
           const msgs = conv.messages;
           const lastMsg = msgs[msgs.length - 1];
           if (lastMsg && lastMsg.role === "assistant") {
-            lastMsg.content += `\n[Error: ${event.payload}]`;
+            lastMsg.content += `\n[Error: ${p.message}]`;
             lastMsg.done = true;
             // 出错时同样自动收起思考块
             if (lastMsg.reasoningExpanded === undefined) {

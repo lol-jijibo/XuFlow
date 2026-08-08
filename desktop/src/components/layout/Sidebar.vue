@@ -15,27 +15,42 @@ const expanded = ref<Record<string, boolean>>({});
 const headerHovered = ref(false);
 
 // ── 右键上下文菜单 ──────────────────────────────────────────
-// 鼠标右击项目行时弹出操作列表（删除、置顶等），点击其他区域自动关闭。
+// 支持项目行右键（重命名、置顶、删除）与会话行右键（重命名、删除）。
+
+type ContextMenuTarget =
+  | { type: "project"; projectId: string }
+  | { type: "conversation"; projectId: string; convId: string };
 
 const contextMenu = ref({
   show: false,
   x: 0,
   y: 0,
-  projectId: null as string | null,
+  target: null as ContextMenuTarget | null,
 });
 
-/** 打开右键菜单：记录鼠标位置和目标项目 ID，自动调整避免溢出屏幕边缘。 */
+/** 项目行右键菜单。 */
 function onProjectContextMenu(e: MouseEvent, projectId: string) {
   e.preventDefault();
   e.stopPropagation();
-  // 菜单预估尺寸：宽约 150px，每项高约 32px（重命名+置顶+删除共 3 项约 104px）
-  const menuW = 150;
   const menuH = 104;
+  showContextMenu(e, menuH, { type: "project", projectId });
+}
+
+/** 会话行右键菜单。 */
+function onConvContextMenu(e: MouseEvent, projectId: string, convId: string) {
+  e.preventDefault();
+  e.stopPropagation();
+  const menuH = 72; // 重命名 + 删除，2 项
+  showContextMenu(e, menuH, { type: "conversation", projectId, convId });
+}
+
+function showContextMenu(e: MouseEvent, menuH: number, target: ContextMenuTarget) {
+  const menuW = 150;
   let x = e.clientX;
   let y = e.clientY;
   if (x + menuW > window.innerWidth) x = window.innerWidth - menuW - 8;
   if (y + menuH > window.innerHeight) y = window.innerHeight - menuH - 8;
-  contextMenu.value = { show: true, x, y, projectId };
+  contextMenu.value = { show: true, x, y, target };
 }
 
 /** 关闭右键菜单。 */
@@ -50,47 +65,60 @@ function onGlobalClick(_e: MouseEvent) {
   }
 }
 
-/** 处理右键菜单选项：重命名 / 置顶 / 删除。重命名位放置在置顶上方第一位。 */
+/** 处理右键菜单选项。 */
 function handleContextMenuSelect(key: string) {
-  const projectId = contextMenu.value.projectId;
+  const target = contextMenu.value.target;
   closeContextMenu();
-  if (!projectId) return;
+  if (!target) return;
 
-  if (key === "rename") {
-    openRenameDialog(projectId);
-  } else if (key === "delete") {
-    const project = store.projects.find((p) => p.id === projectId);
-    if (project) {
-      store.deleteProject(projectId);
-      message.success(`已删除项目: ${project.name}`);
+  if (target.type === "project") {
+    if (key === "rename") {
+      openRenameDialog(target.projectId);
+    } else if (key === "delete") {
+      const project = store.projects.find((p) => p.id === target.projectId);
+      if (project) {
+        store.deleteProject(target.projectId);
+        message.success(`已删除项目: ${project.name}`);
+      }
+    } else if (key === "pin") {
+      const project = store.projects.find((p) => p.id === target.projectId);
+      const pinned = store.pinProject(target.projectId);
+      if (project) {
+        message.success(pinned ? `已置顶: ${project.name}` : `已取消置顶: ${project.name}`);
+      }
     }
-  } else if (key === "pin") {
-    const project = store.projects.find((p) => p.id === projectId);
-    const pinned = store.pinProject(projectId);
-    if (project) {
-      message.success(pinned ? `已置顶: ${project.name}` : `已取消置顶: ${project.name}`);
+  } else if (target.type === "conversation") {
+    if (key === "rename") {
+      startRenameConversation(target.projectId, target.convId);
+    } else if (key === "delete") {
+      const project = store.projects.find((p) => p.id === target.projectId);
+      const conv = project?.conversations.find((c) => c.id === target.convId);
+      if (conv) {
+        store.deleteConversation(target.projectId, target.convId);
+        message.success(`已删除会话: ${conv.title}`);
+      }
     }
   }
 }
 
-// 右键菜单选项：重命名 → 置顶 → 删除，重命名位于置顶上方第一位。
+// 右键菜单选项：根据目标类型显示不同的操作列表。
 const contextMenuOptions = computed(() => {
-  const project = contextMenu.value.projectId
-    ? store.projects.find((p) => p.id === contextMenu.value.projectId)
-    : null;
+  const target = contextMenu.value.target;
+  if (!target) return [];
+
+  if (target.type === "project") {
+    const project = store.projects.find((p) => p.id === target.projectId);
+    return [
+      { label: "重命名项目", key: "rename" },
+      { label: project?.pinned ? "取消置顶" : "置顶项目", key: "pin" },
+      { label: "删除项目", key: "delete" },
+    ];
+  }
+
+  // conversation
   return [
-    {
-      label: "重命名项目",
-      key: "rename",
-    },
-    {
-      label: project?.pinned ? "取消置顶" : "置顶项目",
-      key: "pin",
-    },
-    {
-      label: "删除项目",
-      key: "delete",
-    },
+    { label: "重命名会话", key: "rename" },
+    { label: "删除会话", key: "delete" },
   ];
 });
 
@@ -270,18 +298,64 @@ function startCreateConversation(projectId: string) {
   store.activeConversationId = null;
 }
 
-function handleDeleteConversation(projectId: string, convId: string) {
-  store.deleteConversation(projectId, convId);
-}
-
 /** 清空当前活跃会话，切换到空白对话状态。
  *  不立即创建会话 —— 等用户发送第一条消息时再按需创建。
- *  会话标题在 AI 回复完成后自动提炼，避免侧边栏出现 "新会话 + 数字序号"。 */
+ *  会话标题在 AI 回复完成后自动提炼，避免侧边栏出现 "新会话 + 数字序号"。
+ *
+ *  如果当前会话是隐藏状态（AI 回复尚未完成），在切换前先将其抢救到侧边栏：
+ *  提取第一条用户提示词作为标题、标记为可见，但不中断后端 AI 生成。
+ *  这样用户点击新会话后可以立即开始新的对话，而之前的会话继续在后台
+ *  生成并保留在侧边栏中，随时可切换回去查看。 */
 function handleNewConversation() {
   const projectId = store.activeProjectId;
   if (!projectId) return;
+
+  // 抢救隐藏会话：提取用户第一条提示词为标题，显示到侧边栏，但不停止 AI 生成
+  const currentConv = store.activeConversation;
+  if (currentConv && currentConv.visible === false && currentConv.messages.length > 0) {
+    // 用第一条用户消息提炼会话标题
+    if (!currentConv.title) {
+      const firstUserMsg = currentConv.messages.find((m) => m.role === "user");
+      if (firstUserMsg) {
+        const rawTitle = firstUserMsg.content.trim();
+        const fallbackTitle = rawTitle.length > 50 ? rawTitle.slice(0, 49) + "…" : rawTitle;
+        store.updateConversationTitle(projectId, currentConv.id, fallbackTitle, "auto");
+      }
+    }
+
+    // 显示到侧边栏（AI 回复完成后 agent:done 事件会再次尝试 refine 标题）
+    store.revealConversation(projectId, currentConv.id);
+  }
+
   expanded.value[projectId] = true;
   store.activeConversationId = null;
+}
+
+// ── 回收站操作 ──────────────────────────────────────────
+
+/** 恢复回收站中的会话到原项目。 */
+function handleRestore(convId: string, projectId: string) {
+  const project = store.projects.find((p) => p.id === projectId);
+  const projectName = project?.name ?? "未知项目";
+  const ok = store.restoreConversation(convId, projectId);
+  if (ok) {
+    expanded.value[projectId] = true;
+    message.success(`已恢复会话到: ${projectName}`);
+  }
+}
+
+/** 彻底删除回收站中的会话（物理删除，不可恢复）。 */
+function handlePermanentDelete(convId: string) {
+  const item = store.trashConversations.find((c) => c.id === convId);
+  const title = item?.title ?? "未知会话";
+  store.permanentDeleteConversation(convId);
+  message.success(`已彻底删除: ${title}`);
+}
+
+/** 清空回收站：物理删除所有已标记删除的会话数据。 */
+async function handleClearTrash() {
+  const count = await store.purgeExpiredTrash(0); // 0 天 = 全部清空
+  message.success(`已清空回收站，共删除 ${count} 条会话`);
 }
 </script>
 
@@ -411,17 +485,13 @@ function handleNewConversation() {
               class="conversation-item"
               :class="{ active: store.activeConversationId === conv.id }"
               @click="selectConversation(project.id, conv.id)"
+              @contextmenu="onConvContextMenu($event, project.id, conv.id)"
             >
-              <!-- Chat bubble icon — wireframe -->
-              <svg width="15" height="15" viewBox="0 0 15 15" fill="none" class="conv-icon">
-                <path d="M2.5 3.5a1 1 0 011-1h8a1 1 0 011 1v5.5a1 1 0 01-1 1H7.5L5 12.5V10H3.5a1 1 0 01-1-1v-5.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-              </svg>
               <!-- 会话名：双击进入内联重命名，Enter/blur 确认，Escape 取消 -->
               <span
                 v-if="!renamingConvInfo || renamingConvInfo.convId !== conv.id"
                 class="conv-title"
                 @dblclick.stop="startRenameConversation(project.id, conv.id)"
-                title="双击重命名"
               >{{ conv.title }}</span>
               <NInput
                 v-else
@@ -434,19 +504,6 @@ function handleNewConversation() {
                 @blur="finishRenameConversation"
               />
               <span class="conv-time">{{ formatRelativeTime(conv.updatedAt) }}</span>
-              <NButton
-                size="tiny"
-                quaternary
-                type="error"
-                class="conv-delete-btn"
-                @click.stop="handleDeleteConversation(project.id, conv.id)"
-              >
-                <template #icon>
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                    <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-                  </svg>
-                </template>
-              </NButton>
             </div>
             <div
               v-if="project.conversations.filter(c => c.visible !== false).length === 0"
@@ -458,6 +515,95 @@ function handleNewConversation() {
         </div>
       </div>
     </NScrollbar>
+
+    <!-- 回收站：固定在项目列表下方、设置按钮上方 -->
+    <div class="sidebar-divider sidebar-divider--trash" />
+    <div class="trash-section" :class="{ dark: themeStore.isDark }">
+      <!-- 回收站标题行：点击展开/折叠 -->
+      <div
+        class="trash-header"
+        :class="{ expanded: store.trashExpanded }"
+        @click="store.trashExpanded = !store.trashExpanded"
+      >
+        <!-- 折叠箭头 -->
+        <svg
+          class="trash-chevron"
+          :class="{ expanded: store.trashExpanded }"
+          width="12"
+          height="12"
+          viewBox="0 0 12 12"
+          fill="none"
+        >
+          <path d="M4 2l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <!-- 垃圾桶图标 -->
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" class="trash-icon">
+          <path d="M2.5 4.5l.8 7.5a1 1 0 001 .98h5.4a1 1 0 001-.98l.8-7.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+          <path d="M1.5 4.5h11M9.5 4.5V3a1 1 0 00-1-1h-3a1 1 0 00-1 1v1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+        </svg>
+        <span class="trash-label">回收站</span>
+        <span v-if="store.trashConversations.length > 0" class="trash-count">{{ store.trashConversations.length }}</span>
+        <!-- 清空回收站：仅展开且非空时显示 -->
+        <NButton
+          v-if="store.trashExpanded && store.trashConversations.length > 0"
+          size="tiny"
+          quaternary
+          class="trash-clear-btn"
+          @click.stop="handleClearTrash"
+          title="彻底清空回收站"
+        >
+          <template #icon>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            </svg>
+          </template>
+        </NButton>
+      </div>
+
+      <!-- 回收站展开列表 -->
+      <div v-if="store.trashExpanded" class="trash-list">
+        <div
+          v-for="item in store.trashConversations"
+          :key="item.id"
+          class="trash-item"
+        >
+          <span class="trash-item-title">{{ item.title || "（无标题）" }}</span>
+          <span class="trash-item-time">{{ formatRelativeTime(item.deletedAt ?? item.updatedAt) }}</span>
+          <!-- hover 显示操作按钮 -->
+          <div class="trash-item-actions">
+            <NTooltip trigger="hover">
+              <template #trigger>
+                <NButton size="tiny" quaternary class="trash-action-btn" @click.stop="handleRestore(item.id, item.projectId ?? '')">
+                  <template #icon>
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                      <path d="M2 6a4 4 0 016.5-2.5M10 6a4 4 0 01-6.5 2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                      <path d="M8.5 1v2.5H6M3.5 11V8.5H6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </template>
+                </NButton>
+              </template>
+              恢复会话
+            </NTooltip>
+            <NTooltip trigger="hover">
+              <template #trigger>
+                <NButton size="tiny" quaternary class="trash-action-btn trash-action-btn--danger" @click.stop="handlePermanentDelete(item.id)">
+                  <template #icon>
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                      <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                    </svg>
+                  </template>
+                </NButton>
+              </template>
+              彻底删除（不可恢复）
+            </NTooltip>
+          </div>
+        </div>
+        <!-- 空回收站提示 -->
+        <div v-if="store.trashConversations.length === 0" class="trash-empty">
+          回收站为空
+        </div>
+      </div>
+    </div>
 
     <!-- Bottom — global settings, clearly separated -->
     <div class="sidebar-divider sidebar-divider--bottom" />
@@ -829,14 +975,15 @@ function handleNewConversation() {
 
 .conversation-item {
   display: flex;
-  align-items: center;
-  padding: 7px 10px 7px 34px;   /* pl-34 = indent under folder */
+  align-items: baseline;        /* 不同字号（13px/11px）共享同一基线，视觉更整齐 */
+  padding: 3px 12px 5px 48px;   /* 左内边距 48px = 会话文字与上方项目名精确对齐，上下 3px 紧凑间距 */
   gap: 8px;
   font-size: 13px;
+  line-height: 1.4;
   cursor: pointer;
   transition: background-color 0.12s ease;
   border-radius: 4px;
-  margin: 1px 6px;
+  margin: 0 6px;
 }
 
 .conversation-item:hover {
@@ -856,37 +1003,19 @@ function handleNewConversation() {
   background: rgba(255, 255, 255, 0.06);
 }
 
-/* Chat bubble icon */
-.conv-icon {
-  flex-shrink: 0;
-  color: #9ca3af;
-  transition: color 0.15s ease;
-}
-
-.sidebar.dark .conv-icon {
-  color: #ffffff;
-}
-
-.conversation-item.active .conv-icon {
-  color: #6b7280;
-}
-
-.sidebar.dark .conversation-item.active .conv-icon {
-  color: #ffffff;
-}
-
-/* Conversation title — 无衬线极客风，Inter / SF Pro 优先，抗锯齿 */
+/* Conversation title — 轻量风格，统一字重 400，过长省略号截断 */
 .conv-title {
   flex: 1;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-family: "Inter", "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif;
-  font-size: 14px;
-  font-weight: 450;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: inherit;
+  color: #374151;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  color: #374151;
 }
 
 .sidebar.dark .conv-title {
@@ -895,50 +1024,37 @@ function handleNewConversation() {
 
 .conversation-item.active .conv-title {
   color: #111827;
-  font-weight: 470;
 }
 
 .sidebar.dark .conversation-item.active .conv-title {
   color: #ffffff;
-  font-weight: 470;
 }
 
 /* Relative timestamp */
 .conv-time {
   flex-shrink: 0;
   font-size: 11px;
+  line-height: inherit;
   color: #9ca3af;
   white-space: nowrap;
-  margin-left: auto;
+  margin-left: auto;           /* 靠右对齐，与会话文字同行最右侧 */
 }
 
 .sidebar.dark .conv-time {
-  color: #ffffff;
+  color: #6b7280;
 }
 
 .conversation-item.active .conv-time {
-  color: #94a3b8;
+  color: #9ca3af;
 }
 
 .sidebar.dark .conversation-item.active .conv-time {
-  color: #ffffff;
-}
-
-/* Delete button */
-.conv-delete-btn {
-  opacity: 0;
-  flex-shrink: 0;
-  transition: opacity 0.12s ease;
-  margin-left: 2px;
-}
-
-.conversation-item:hover .conv-delete-btn {
-  opacity: 1;
+  color: #9ca3af;
 }
 
 /* Empty state */
 .conv-empty {
-  padding: 8px 12px 8px 34px;
+  padding: 6px 12px 6px 48px;
   font-size: 12px;
   color: #9ca3af;
   font-style: italic;
@@ -1138,6 +1254,212 @@ function handleNewConversation() {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* ── 回收站 ──────────────────────────────────────────── */
+
+.sidebar-divider--trash {
+  margin: 8px 12px 4px;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.sidebar.dark .sidebar-divider--trash {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.trash-section {
+  padding: 0 6px;
+  flex-shrink: 0;
+}
+
+/* 回收站标题行 */
+.trash-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+  user-select: none;
+}
+
+.trash-header:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.trash-section.dark .trash-header:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* 折叠箭头 */
+.trash-chevron {
+  flex-shrink: 0;
+  color: #9ca3af;
+  transition: transform 0.15s ease;
+}
+
+.trash-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.trash-section.dark .trash-chevron {
+  color: #6b7280;
+}
+
+/* 垃圾桶图标 */
+.trash-icon {
+  flex-shrink: 0;
+  color: #9ca3af;
+}
+
+.trash-section.dark .trash-icon {
+  color: #6b7280;
+}
+
+/* 回收站文字 */
+.trash-label {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: #6b7280;
+}
+
+.trash-section.dark .trash-label {
+  color: #9ca3af;
+}
+
+/* 回收站计数 */
+.trash-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: #9ca3af;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 8px;
+  padding: 1px 6px;
+  min-width: 18px;
+  text-align: center;
+}
+
+.trash-section.dark .trash-count {
+  color: #6b7280;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* 清空按钮 */
+.trash-clear-btn {
+  opacity: 0.6;
+  color: #9ca3af;
+  flex-shrink: 0;
+}
+
+.trash-clear-btn:hover {
+  opacity: 1;
+  color: #ef4444;
+}
+
+/* 回收站列表 */
+.trash-list {
+  padding: 2px 0 4px;
+}
+
+/* 回收站条目 */
+.trash-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px 4px 28px;
+  border-radius: 4px;
+  cursor: default;
+  transition: background-color 0.12s ease;
+}
+
+.trash-item:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.trash-section.dark .trash-item:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* 回收站条目标题 — 灰色/删除线表示已删除状态 */
+.trash-item-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  color: #9ca3af;
+  text-decoration: line-through;
+}
+
+.trash-section.dark .trash-item-title {
+  color: #6b7280;
+}
+
+/* 回收站条目时间 */
+.trash-item-time {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: #c4c4c4;
+  white-space: nowrap;
+}
+
+.trash-section.dark .trash-item-time {
+  color: #52525b;
+}
+
+/* 操作按钮容器：默认隐藏，hover 时显示 */
+.trash-item-actions {
+  display: none;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+
+.trash-item:hover .trash-item-actions {
+  display: flex;
+}
+
+/* 操作按钮 */
+.trash-action-btn {
+  color: #9ca3af;
+  opacity: 0.6;
+}
+
+.trash-action-btn:hover {
+  opacity: 1;
+  color: #374151;
+}
+
+.trash-section.dark .trash-action-btn {
+  color: #6b7280;
+}
+
+.trash-section.dark .trash-action-btn:hover {
+  color: #e4e4e7;
+}
+
+/* 彻底删除按钮 hover 变红 */
+.trash-action-btn--danger:hover {
+  color: #ef4444 !important;
+}
+
+.trash-section.dark .trash-action-btn--danger:hover {
+  color: #f87171 !important;
+}
+
+/* 回收站空状态 */
+.trash-empty {
+  padding: 4px 8px 4px 28px;
+  font-size: 11px;
+  color: #c4c4c4;
+  font-style: italic;
+}
+
+.trash-section.dark .trash-empty {
+  color: #52525b;
 }
 
 /* NDropdown / NSelect 下拉菜单视觉样式统一由 App.vue 全局样式控制（Naive UI Teleport 到 body，scoped 穿透无效） */

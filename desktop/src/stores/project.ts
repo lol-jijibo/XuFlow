@@ -39,6 +39,10 @@ export interface Conversation {
   messages: ChatMessage[];
   createdAt: number;
   updatedAt: number;
+  /** 软删除时间戳：非空表示在回收站中。 */
+  deletedAt?: number | null;
+  /** 归属项目 ID：回收站中需要此字段以显示来源项目名。 */
+  projectId?: string;
 }
 
 export interface Project {
@@ -167,6 +171,8 @@ async function loadFromMySql(): Promise<{ projects: Project[]; activeProjectId: 
           title: s.title,
           titleSource: (s.title_source as any) ?? "default",
           visible: s.visible,
+          deletedAt: s.deleted_at ?? null,
+          projectId: p.id,
           messages,
           createdAt: s.created_at,
           updatedAt: s.updated_at,
@@ -184,13 +190,12 @@ async function loadFromMySql(): Promise<{ projects: Project[]; activeProjectId: 
       });
     }
 
-    // 尝试从 localStorage 恢复活跃项目/会话 ID（MySQL 不存这个状态）
-    const localState = loadFromLocalStorage();
-    const activeProjectId = localState.activeProjectId ?? projects[0]?.id ?? null;
-    const activeConversationId = localState.activeConversationId
-      ?? projects[0]?.conversations.filter(c => c.visible !== false)[0]?.id
-      ?? projects[0]?.conversations[0]?.id
-      ?? null;
+    // 每次启动桌面端都展示空白新会话界面，不恢复活跃会话 ID。
+    // 活跃项目取第一个项目，若无项目则让 on-boarding 逻辑创建默认项目。
+    // 修复：原 `localState.activeProjectId` 引用了一个不存在的变量，
+    // 导致 loadFromMySql() 每次都抛 ReferenceError，应用始终回退到过期的 localStorage 数据。
+    const activeProjectId = projects[0]?.id ?? null;
+    const activeConversationId = null;
 
     return { projects, activeProjectId, activeConversationId };
   } catch (e) {
@@ -205,10 +210,38 @@ export const useProjectStore = defineStore("project", () => {
   const saved = loadFromLocalStorage();
   const projects = ref<Project[]>(saved.projects);
   const activeProjectId = ref<string | null>(saved.activeProjectId);
-  const activeConversationId = ref<string | null>(saved.activeConversationId);
+  // 每次启动桌面端时开启空白新会话，不恢复上次的活跃会话 ID，
+  // 让用户在中间的聊天框直接输入即可，ChatPanel 会在首次发送消息时自动创建新会话
+  const activeConversationId = ref<string | null>(null);
 
   /** SQLite 是否已就绪（启动即连接，始终为 true）。 */
   const dbConnected = ref(true);
+
+  /** 回收站中的会话列表，从 SQLite 加载。 */
+  const trashConversations = ref<Conversation[]>([]);
+
+  /** 回收站是否在侧边栏中展开。 */
+  const trashExpanded = ref(false);
+
+  /** 从 SQLite 加载回收站数据。 */
+  async function loadTrashFromDb() {
+    try {
+      const trashRows = await invoke<any[]>("db_list_trash_sessions");
+      trashConversations.value = trashRows.map((s: any) => ({
+        id: s.id,
+        title: s.title,
+        titleSource: (s.title_source as any) ?? "default",
+        visible: s.visible,
+        deletedAt: s.deleted_at,
+        projectId: s.project_id,
+        messages: [],
+        createdAt: s.created_at,
+        updatedAt: s.updated_at,
+      }));
+    } catch (e) {
+      console.error("[project] Failed to load trash from SQLite:", e);
+    }
+  }
 
   /** 尝试从 SQLite 加载数据。成功则替换 projects 并返回 true。 */
   async function tryLoadFromMySql(): Promise<boolean> {
@@ -218,7 +251,9 @@ export const useProjectStore = defineStore("project", () => {
       projects.value = data.projects;
       activeProjectId.value = data.activeProjectId;
       activeConversationId.value = data.activeConversationId;
-      console.log("[project] Loaded from SQLite:", projects.value.length, "projects");
+      // 同步加载回收站数据
+      await loadTrashFromDb();
+      console.log("[project] Loaded from SQLite:", projects.value.length, "projects,", trashConversations.value.length, "in trash");
       return true;
     } catch (e) {
       console.error("[project] Failed to load from SQLite, falling back to localStorage:", e);
@@ -227,12 +262,16 @@ export const useProjectStore = defineStore("project", () => {
   }
 
   /** Validate that saved IDs still point to real objects; fall back to first available.
-   *  Skips invisible conversations when picking a fallback. */
+   *  Skips invisible conversations when picking a fallback.
+   *  当 activeConversationId 为 null 时保留空状态（启动时展示空白新会话界面），
+   *  仅在已指向某个会话但该会话不存在时才回退到首个可见会话。 */
   function validateState() {
     const project = projects.value.find((p) => p.id === activeProjectId.value);
     if (!project) {
       activeProjectId.value = projects.value[0]?.id ?? null;
     }
+    // null 表示有意不选中任何会话（启动时展示空白对话），不需要回退
+    if (activeConversationId.value === null) return;
     const activeProj = projects.value.find((p) => p.id === activeProjectId.value);
     const conv = activeProj?.conversations.find((c) => c.id === activeConversationId.value);
     if (!conv) {
@@ -243,9 +282,9 @@ export const useProjectStore = defineStore("project", () => {
 
   validateState();
 
-  /** 持久化：SQLite 已由各方法实时写入，此处仅回退到 localStorage。 */
+  /** 持久化：SQLite 已由各方法实时写入，同时更新 localStorage 作为安全回退。
+   *  避免 SQLite 加载失败时回退到包含已删除会话的过期数据。 */
   function persist() {
-    if (dbConnected.value) return; // SQLite 模式下不需要 localStorage
     saveToLocalStorage(projects.value, activeProjectId.value, activeConversationId.value);
   }
 
@@ -295,10 +334,13 @@ export const useProjectStore = defineStore("project", () => {
     projects.value.push(project);
 
     if (dbConnected.value) {
-      invoke("db_create_project", { name, source: "local" })
+      // 将前端生成的 ID 传给后端，确保前后端使用同一个 ID
+      invoke("db_create_project", { id: project.id, name, source: "local" })
         .then((row: any) => {
-          // 用 MySQL 返回的 id 和 timestamp 覆盖本地值
-          project.id = row.id;
+          if (row.id !== project.id) {
+            console.warn("[project] Backend returned different project id, syncing:", project.id, "->", row.id);
+            project.id = row.id;
+          }
           project.createdAt = row.created_at;
           project.updatedAt = row.updated_at;
         })
@@ -321,9 +363,12 @@ export const useProjectStore = defineStore("project", () => {
     projects.value.push(project);
 
     if (dbConnected.value) {
-      invoke("db_create_project", { name, source: "imported" })
+      invoke("db_create_project", { id: project.id, name, source: "imported" })
         .then((row: any) => {
-          project.id = row.id;
+          if (row.id !== project.id) {
+            console.warn("[project] Backend returned different project id, syncing:", project.id, "->", row.id);
+            project.id = row.id;
+          }
           project.createdAt = row.created_at;
           project.updatedAt = row.updated_at;
         })
@@ -336,6 +381,7 @@ export const useProjectStore = defineStore("project", () => {
   function deleteProject(id: string) {
     const idx = projects.value.findIndex((p) => p.id === id);
     if (idx === -1) return;
+    const removed = projects.value[idx];
     projects.value.splice(idx, 1);
     if (activeProjectId.value === id) {
       activeProjectId.value = projects.value[0]?.id ?? null;
@@ -344,8 +390,19 @@ export const useProjectStore = defineStore("project", () => {
     }
 
     if (dbConnected.value) {
-      invoke("db_delete_project", { id })
-        .catch((e) => console.error("[project] db_delete_project failed:", e));
+      invoke<boolean>("db_delete_project", { id })
+        .then((deleted) => {
+          if (!deleted) {
+            console.warn("[project] db_delete_project returned false — project not found in SQLite, restoring UI state");
+            projects.value.splice(idx, 0, removed);
+            activeProjectId.value = removed.id;
+          }
+        })
+        .catch((e) => {
+          console.error("[project] db_delete_project failed:", e);
+          projects.value.splice(idx, 0, removed);
+          activeProjectId.value = removed.id;
+        });
     }
     persist();
   }
@@ -405,14 +462,21 @@ export const useProjectStore = defineStore("project", () => {
     project.updatedAt = Date.now();
 
     if (dbConnected.value) {
+      // 将前端生成的 ID 传给后端，确保前后端使用同一个 ID，
+      // 避免后续删除/重命名操作因 ID 不匹配而静默失败
       invoke("db_create_session", {
+        id: conv.id,
         projectId,
         title: conv.title,
         titleSource: conv.titleSource,
         visible,
       })
         .then((row: any) => {
-          conv.id = row.id;
+          // 后端现在使用前端传入的 ID，但以防后端降级生成新 ID，仍做同步覆盖
+          if (row.id !== conv.id) {
+            console.warn("[project] Backend returned different session id, syncing:", conv.id, "->", row.id);
+            conv.id = row.id;
+          }
           conv.createdAt = row.created_at;
           conv.updatedAt = row.updated_at;
         })
@@ -427,6 +491,8 @@ export const useProjectStore = defineStore("project", () => {
     if (!project) return;
     const idx = project.conversations.findIndex((c) => c.id === convId);
     if (idx === -1) return;
+    // 软删除：先保存引用，从活跃列表移除，然后移入回收站
+    const removed = project.conversations[idx];
     project.conversations.splice(idx, 1);
     project.updatedAt = Date.now();
     if (activeConversationId.value === convId) {
@@ -434,10 +500,101 @@ export const useProjectStore = defineStore("project", () => {
     }
 
     if (dbConnected.value) {
-      invoke("db_delete_session", { id: convId })
-        .catch((e) => console.error("[project] db_delete_session failed:", e));
+      invoke<boolean>("db_delete_session", { id: convId })
+        .then((deleted) => {
+          if (deleted) {
+            // 同步到本地回收站列表
+            trashConversations.value.unshift({
+              ...removed,
+              deletedAt: Date.now(),
+              projectId,
+            });
+          } else {
+            // 软删除失败（ID 不匹配），回退前端状态
+            console.warn("[project] db_delete_session returned false — restoring UI state");
+            project.conversations.splice(idx, 0, removed);
+            project.updatedAt = Date.now();
+          }
+        })
+        .catch((e) => {
+          console.error("[project] db_delete_session failed:", e);
+          project.conversations.splice(idx, 0, removed);
+          project.updatedAt = Date.now();
+        });
+    } else {
+      // 无数据库时直接加入本地回收站
+      trashConversations.value.unshift({
+        ...removed,
+        deletedAt: Date.now(),
+        projectId,
+      });
     }
     persist();
+  }
+
+  /** 从回收站恢复会话到原项目。 */
+  function restoreConversation(convId: string, projectId: string): boolean {
+    const trashIdx = trashConversations.value.findIndex((c) => c.id === convId);
+    if (trashIdx === -1) return false;
+
+    const project = projects.value.find((p) => p.id === projectId);
+    if (!project) return false;
+
+    const [restored] = trashConversations.value.splice(trashIdx, 1);
+    restored.deletedAt = null;
+    restored.projectId = undefined;
+    project.conversations.push(restored);
+    project.updatedAt = Date.now();
+
+    if (dbConnected.value) {
+      invoke<boolean>("db_restore_session", { id: convId })
+        .then((ok) => {
+          if (!ok) console.warn("[project] db_restore_session returned false");
+        })
+        .catch((e) => console.error("[project] db_restore_session failed:", e));
+    }
+    persist();
+    return true;
+  }
+
+  /** 彻底删除会话（物理删除，不可恢复）。 */
+  function permanentDeleteConversation(convId: string): boolean {
+    const trashIdx = trashConversations.value.findIndex((c) => c.id === convId);
+    if (trashIdx === -1) return false;
+
+    trashConversations.value.splice(trashIdx, 1);
+
+    if (dbConnected.value) {
+      invoke<boolean>("db_permanent_delete_session", { id: convId })
+        .then((ok) => {
+          if (!ok) console.warn("[project] db_permanent_delete_session returned false");
+        })
+        .catch((e) => console.error("[project] db_permanent_delete_session failed:", e));
+    }
+    persist();
+    return true;
+  }
+
+  /** 清空回收站中所有过期（超过指定天数）的会话。 */
+  async function purgeExpiredTrash(retentionDays: number = 30): Promise<number> {
+    if (!dbConnected.value) {
+      // 本地回收站清理
+      const cutoff = Date.now() - retentionDays * 24 * 3600 * 1000;
+      const before = trashConversations.value.length;
+      trashConversations.value = trashConversations.value.filter(
+        (c) => !c.deletedAt || c.deletedAt > cutoff
+      );
+      return before - trashConversations.value.length;
+    }
+    try {
+      const count = await invoke<number>("db_purge_expired_trash", { retentionDays });
+      // 重新加载回收站以保持同步
+      await loadTrashFromDb();
+      return count;
+    } catch (e) {
+      console.error("[project] purge_expired_trash failed:", e);
+      return 0;
+    }
   }
 
   function switchTo(projectId: string, convId?: string) {
@@ -500,7 +657,12 @@ export const useProjectStore = defineStore("project", () => {
     project.updatedAt = Date.now();
 
     if (dbConnected.value) {
-      invoke("db_reveal_session", { id: convId })
+      invoke<boolean>("db_reveal_session", { id: convId })
+        .then((revealed) => {
+          if (!revealed) {
+            console.warn("[project] db_reveal_session returned false — session not found in SQLite");
+          }
+        })
         .catch((e) => console.error("[project] db_reveal_session failed:", e));
     }
     persist();
@@ -543,30 +705,25 @@ export const useProjectStore = defineStore("project", () => {
   // 尝试从 MySQL 加载（异步，不阻塞 store 创建）
   tryLoadFromMySql().then((loaded) => {
     if (loaded) {
-      // MySQL 加载成功后的后处理
+      // 仅在没有项目时才创建默认项目，不预建会话 ——
+      // 用户启动后看到空白对话界面，首次发送消息时由 ChatPanel 自动创建会话
       if (projects.value.length === 0) {
         const defaultProject = createProject("默认项目");
-        const defaultConv = createConversation(defaultProject.id, "默认会话");
         activeProjectId.value = defaultProject.id;
-        activeConversationId.value = defaultConv.id;
       }
       validateState();
     } else {
       // localStorage 回退
       if (projects.value.length === 0) {
         const defaultProject = createProject("默认项目");
-        const defaultConv = createConversation(defaultProject.id, "默认会话");
         activeProjectId.value = defaultProject.id;
-        activeConversationId.value = defaultConv.id;
       }
     }
   }).catch(() => {
     // 连不上 MySQL，回退到 localStorage
     if (projects.value.length === 0) {
       const defaultProject = createProject("默认项目");
-      const defaultConv = createConversation(defaultProject.id, "默认会话");
       activeProjectId.value = defaultProject.id;
-      activeConversationId.value = defaultConv.id;
     }
   });
 
@@ -579,6 +736,10 @@ export const useProjectStore = defineStore("project", () => {
     activeConversation,
     activeMessages,
     dbConnected,
+    // 回收站
+    trashConversations,
+    trashExpanded,
+    loadTrashFromDb,
     tryLoadFromMySql,
     createProject,
     importProject,
@@ -587,6 +748,9 @@ export const useProjectStore = defineStore("project", () => {
     updateProjectName,
     createConversation,
     deleteConversation,
+    restoreConversation,
+    permanentDeleteConversation,
+    purgeExpiredTrash,
     switchTo,
     persistMessages,
     updateConversationTitle,
